@@ -96,7 +96,7 @@ export function createEngine(o: EngineOpts) {
   }
 
   // ---- camera (fallback orbit) ----
-  const orbit = { yaw: 0.6, pitch: 0.75, r: 1.3 };
+  const orbit = { yaw: 0.6, pitch: 0.7, r: 2.4 };
   function placeCam() {
     camera.position.set(Math.sin(orbit.yaw) * Math.cos(orbit.pitch) * orbit.r, Math.sin(orbit.pitch) * orbit.r, Math.cos(orbit.yaw) * Math.cos(orbit.pitch) * orbit.r);
     camera.lookAt(0, 0.1, 0);
