@@ -154,7 +154,7 @@ export function BlockAR() {
     try {
       const blocks = await aiBuild({ data: { prompt: aiText.trim() } });
       if (!blocks.length) setToast("AI couldn't design that — try other words");
-      else { engine.current?.addMany(blocks); setToast(`Built ${blocks.length} blocks ✨`); setAiOpen(false); setAiText(""); }
+      else { engine.current?.addMany(blocks); setToast(`Built ${blocks.length} blocks`); setAiOpen(false); setAiText(""); }
     } catch (err) { setToast((err as Error).message || "AI build failed"); }
     setAiBusy(false);
   }
