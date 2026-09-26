@@ -153,7 +153,7 @@ export function createEngine(o: EngineOpts) {
   let pinchDist = 0;
 
   function down(e: PointerEvent) {
-    o.canvas.setPointerCapture(e.pointerId);
+    try { o.canvas.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 2) {
       if (stroke) { commit(stroke); stroke = null; }
@@ -316,8 +316,18 @@ export function createEngine(o: EngineOpts) {
   resize();
   window.addEventListener("resize", resize);
 
+  const fake = (x: number, y: number) => ({ pointerId: 999, clientX: x, clientY: y } as PointerEvent);
   return {
     resize,
+    synth(type: "down" | "move" | "up", x: number, y: number) {
+      if (type === "down") down(fake(x, y)); else if (type === "move") move(fake(x, y)); else up(fake(x, y));
+    },
+    setScale(sc: number) { root.scale.setScalar(sc); },
+    addMany(list: Cell[]) {
+      const chs: Change[] = [];
+      for (const c of list) { const key = k(c.x, c.y, c.z); if (cells.has(key)) continue; chs.push({ key, prev: null, next: c }); }
+      apply(chs, "next"); commit(chs);
+    },
     startXR,
     undo() { const a = undo.pop(); if (a) { apply(a, "prev"); redo.push(a); emit(); } },
     redo() { const a = redo.pop(); if (a) { apply(a, "next"); undo.push(a); emit(); } },

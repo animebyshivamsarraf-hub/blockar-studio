@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { Box, Camera, Check, Circle, Cylinder, Hand, Move, Paintbrush, Redo2, Save, FolderOpen, Trash2, Triangle, Undo2, Group, ScanLine, Pointer } from "lucide-react";
 import { COLORS, createEngine, type Engine, type Mode, type Shape } from "./engine";
 import { cn } from "@/lib/utils";
+import { startHands, type HandFrame } from "./hands";
+import { aiBuild } from "@/lib/ai-build.functions";
+import { Sparkles, Loader2, X } from "lucide-react";
 
 type Stage = "welcome" | "permission" | "scanning" | "build";
 const SAVE_KEY = "blockar:world";
@@ -41,6 +44,15 @@ export function BlockAR() {
   const [hint, setHint] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [guide, setGuide] = useState(true);
+  const [size, setSize] = useState<"S" | "M" | "L">("M");
+  const [hand, setHand] = useState<"off" | "loading" | "on">("off");
+  const [handSeen, setHandSeen] = useState(false);
+  const [pinch, setPinch] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiText, setAiText] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const handCanvas = useRef<HTMLCanvasElement>(null);
+  const stopHands = useRef<(() => void) | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -100,6 +112,53 @@ export function BlockAR() {
     } catch (err) { setToast((err as Error).message || "AR could not start"); }
   }
 
+  useEffect(() => { engine.current?.setScale({ S: 0.5, M: 1, L: 1.8 }[size]); }, [size, stage]);
+  useEffect(() => () => stopHands.current?.(), []);
+
+  async function toggleHands() {
+    if (hand !== "off") { stopHands.current?.(); stopHands.current = null; setHand("off"); setHandSeen(false); clearHandCanvas(); return; }
+    if (!camOk || !videoRef.current) { setToast("Hand control needs the back camera — allow it first"); return; }
+    setHand("loading");
+    let pinched = false;
+    try {
+      stopHands.current = await startHands(videoRef.current, (f: HandFrame | null) => {
+        setHandSeen(!!f);
+        drawHand(f);
+        const e = engine.current;
+        if (!f) { if (pinched && e) { e.synth("up", 0, 0); pinched = false; setPinch(false); } return; }
+        const { x, y } = f.cursor;
+        if (f.pinching && !pinched) { e?.synth("down", x, y); pinched = true; setPinch(true); }
+        else if (f.pinching && pinched) e?.synth("move", x, y);
+        else if (!f.pinching && pinched) { e?.synth("up", x, y); pinched = false; setPinch(false); }
+      });
+      setHand("on"); setGuide(false);
+      setToast("Show your hand to the camera · pinch to grab");
+    } catch { setHand("off"); setToast("Hand tracking couldn't start on this device"); }
+  }
+  function clearHandCanvas() { const c = handCanvas.current; c?.getContext("2d")?.clearRect(0, 0, c.width, c.height); }
+  function drawHand(f: HandFrame | null) {
+    const c = handCanvas.current; if (!c) return;
+    if (c.width !== innerWidth) { c.width = innerWidth; c.height = innerHeight; }
+    const g = c.getContext("2d")!; g.clearRect(0, 0, c.width, c.height);
+    if (!f) return;
+    const css = getComputedStyle(document.documentElement);
+    g.fillStyle = css.getPropertyValue("--brand-cyan") || "cyan";
+    for (const p of f.points) { g.beginPath(); g.arc(p.x, p.y, 4, 0, 7); g.fill(); }
+    g.lineWidth = 3; g.strokeStyle = f.pinching ? css.getPropertyValue("--success") : css.getPropertyValue("--foreground");
+    g.beginPath(); g.arc(f.cursor.x, f.cursor.y, f.pinching ? 10 : 18, 0, 7); g.stroke();
+  }
+
+  async function runAI() {
+    if (!aiText.trim() || aiBusy) return;
+    setAiBusy(true);
+    try {
+      const blocks = await aiBuild({ data: { prompt: aiText.trim() } });
+      if (!blocks.length) setToast("AI couldn't design that — try other words");
+      else { engine.current?.addMany(blocks); setToast(`Built ${blocks.length} blocks`); setAiOpen(false); setAiText(""); }
+    } catch (err) { setToast((err as Error).message || "AI build failed"); }
+    setAiBusy(false);
+  }
+
   const save = () => { localStorage.setItem(SAVE_KEY, JSON.stringify(engine.current?.serialize() ?? [])); setToast("World saved"); };
   const load = () => {
     const raw = localStorage.getItem(SAVE_KEY);
@@ -145,6 +204,7 @@ export function BlockAR() {
       {camOk && <video ref={videoRef} playsInline muted className="absolute inset-0 h-full w-full object-cover" />}
       {!camOk && <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_70%,var(--glow),transparent_65%)]" />}
       {stage === "build" && <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />}
+      <canvas ref={handCanvas} className="pointer-events-none absolute inset-0 h-full w-full" />
 
       {stage === "scanning" && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 bg-background/40">
@@ -169,9 +229,21 @@ export function BlockAR() {
                   <div className="mt-1 text-[10px] text-muted-foreground">tap to hide</div>
                 </button>
               )}
-              <div className="hud flex w-fit flex-col items-center gap-1 px-3 py-2 text-[11px]">
-                <Hand className="h-5 w-5 text-brand-violet" />
-                <span>Touch</span><span className="flex items-center gap-1 text-success"><span className="h-1.5 w-1.5 rounded-full bg-success" />Active</span>
+              <button onClick={toggleHands} className={cn("hud pointer-events-auto flex w-[76px] flex-col items-center gap-1 px-2 py-2 text-[11px]", hand === "on" && "ring-1 ring-brand-violet")}>
+                {hand === "loading" ? <Loader2 className="h-5 w-5 animate-spin text-brand-violet" /> : <Hand className="h-5 w-5 text-brand-violet" />}
+                <span className="font-medium">{hand === "off" ? "Hand: Off" : hand === "loading" ? "Loading" : handSeen ? "Tracking" : "No hand"}</span>
+                <span className={cn("flex items-center gap-1", hand === "on" && handSeen ? "text-success" : "text-muted-foreground")}>
+                  <span className={cn("h-1.5 w-1.5 rounded-full", hand === "on" && handSeen ? "bg-success" : "bg-muted-foreground")} />
+                  {hand === "off" ? "Tap to use" : pinch ? "Pinching" : "Pinch ready"}
+                </span>
+              </button>
+              <div className="hud pointer-events-auto flex w-[76px] flex-col items-center gap-1 p-1.5 text-[10px]">
+                <span className="text-muted-foreground">Block size</span>
+                <div className="flex gap-1">
+                  {(["S", "M", "L"] as const).map((z) => (
+                    <button key={z} onClick={() => setSize(z)} className={cn("h-6 w-6 rounded-md text-xs font-semibold", size === z ? "bg-primary text-primary-foreground" : "bg-muted")}>{z}</button>
+                  ))}
+                </div>
               </div>
             </div>
             <div className="flex flex-col items-end gap-2">
@@ -197,6 +269,16 @@ export function BlockAR() {
           </div>
 
           <div className="flex-1" />
+          {aiOpen ? (
+            <form onSubmit={(e) => { e.preventDefault(); runAI(); }} className="hud pointer-events-auto mb-2 flex items-center gap-2 p-2">
+              <Sparkles className="ml-1 h-5 w-5 shrink-0 text-brand-pink" />
+              <input autoFocus value={aiText} onChange={(e) => setAiText(e.target.value)} maxLength={300} placeholder="Type anything… a house, a tree, a car" className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-muted-foreground" />
+              <button disabled={aiBusy || !aiText.trim()} className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">{aiBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Build"}</button>
+              <button type="button" aria-label="Close" onClick={() => setAiOpen(false)} className="p-1 text-muted-foreground"><X className="h-4 w-4" /></button>
+            </form>
+          ) : (
+            <button onClick={() => setAiOpen(true)} className="pointer-events-auto mx-auto mb-2 flex items-center gap-2 rounded-full bg-gradient-to-r from-brand-violet to-brand-pink px-4 py-2 text-sm font-semibold text-primary-foreground shadow-lg"><Sparkles className="h-4 w-4" />AI Build</button>
+          )}
           {toast && <div className="mx-auto mb-2 rounded-full bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground">{toast}</div>}
 
           {/* bottom */}
