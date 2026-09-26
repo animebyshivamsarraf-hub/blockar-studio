@@ -36,7 +36,7 @@ export function BlockAR() {
   const [xrOk, setXrOk] = useState(false);
   const [mode, setMode] = useState<Mode>("build");
   const [shape, setShape] = useState<Shape>("cube");
-  const [color, setColor] = useState(COLORS[0]);
+  const [color, setColor] = useState<string>(COLORS[0]!);
   const [info, setInfo] = useState({ count: 0, canUndo: false, canRedo: false });
   const [hint, setHint] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
