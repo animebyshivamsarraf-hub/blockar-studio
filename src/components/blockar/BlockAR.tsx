@@ -87,7 +87,7 @@ export function BlockAR() {
       onChange: setInfo,
       onHint: setHint,
     });
-    engine.current = e; (window as unknown as { __bk: Engine }).__bk = e;
+    engine.current = e;
     return () => { e.dispose(); engine.current = null; };
   }, [stage]);
 
