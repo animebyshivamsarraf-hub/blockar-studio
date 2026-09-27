@@ -57,7 +57,7 @@ export function BlockAR() {
   const [aiText, setAiText] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
   const [trackN, setTrackN] = useState(0);
-  const [loop, setLoop] = useState(true);
+  const [loop, setLoop] = useState(false);
   const [riding, setRiding] = useState(false);
   const [pov, setPov] = useState(true);
   const [speed, setSpeed] = useState(0);
@@ -104,7 +104,7 @@ export function BlockAR() {
   async function allowCamera() {
     setCamErr(null);
     try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" } }, audio: false });
       streamRef.current = s; setCamOk(true);
     } catch {
       setCamErr("Camera blocked or unavailable — you can still build on the virtual floor.");
@@ -118,11 +118,11 @@ export function BlockAR() {
     try {
       streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setCamOk(false);
       await engine.current.startXR(overlayRef.current);
-      setToast("AR on — aim at a surface and tap");
+      setToast("AR on — choose a surface, then pinch to build");
     } catch (err) { setToast((err as Error).message || "AR could not start"); }
   }
 
-  useEffect(() => { engine.current?.setScale({ S: 0.5, M: 1, L: 1.8 }[size]); }, [size, stage]);
+  useEffect(() => { engine.current?.setScale(1); }, [size, stage]);
   useEffect(() => () => stopHands.current?.(), []);
 
   async function toggleHands() {
@@ -221,7 +221,7 @@ export function BlockAR() {
             <h2 className="mt-4 text-center font-display text-xl font-semibold">Camera permission</h2>
             <p className="mt-2 text-center text-sm text-muted-foreground">BlockAR uses your rear camera to place blocks in your room.</p>
             <ul className="mt-5 space-y-3 text-sm">
-              {["Back camera (environment)", xrOk ? "WebXR AR supported on this device" : "Camera overlay mode (works on any phone)", "Touch building — tap & drag"].map((t) => (
+              {["Back camera (environment)", xrOk ? "WebXR AR supported on this device" : "Rear-camera preview mode (room-locked AR requires WebXR)", "Touch building — tap & drag"].map((t) => (
                 <li key={t} className="flex items-center gap-3"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-success text-background"><Check className="h-3 w-3" /></span>{t}</li>
               ))}
             </ul>
@@ -258,7 +258,7 @@ export function BlockAR() {
                 <button onClick={() => setGuide(false)} className="pointer-events-auto hud max-w-[210px] p-3 text-left">
                   <div className="flex items-center gap-2 font-display text-sm font-semibold"><Pointer className="h-4 w-4 text-brand-cyan" />How to play</div>
                   <ol className="mt-1.5 list-decimal space-y-0.5 pl-4 text-xs text-foreground/80">
-                    <li>Aim the green marker</li><li>Tap to place a block</li><li>Drag to build lines & walls</li><li>Two fingers: orbit & zoom</li>
+                    <li>Aim the green marker</li><li>Tap to place a block</li><li>Drag to build lines & walls</li><li>Pinch/drag or touch to build</li>
                   </ol>
                   <div className="mt-1 text-[10px] text-muted-foreground">tap to hide</div>
                 </button>
