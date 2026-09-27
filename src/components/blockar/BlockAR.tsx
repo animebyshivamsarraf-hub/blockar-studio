@@ -52,7 +52,9 @@ export function BlockAR() {
   const [toast, setToast] = useState<string | null>(null);
   const [guide, setGuide] = useState(true);
   const [size, setSize] = useState<"S" | "M" | "L">("M");
-  const [hand, setHand] = useState<"off" | "loading" | "on">("off");
+  const [hand, setHand] = useState<"off" | "starting" | "initializing" | "on" | "error">("off");
+  const [backendType, setBackendType] = useState<"WEBXR HANDS" | "MEDIAPIPE FALLBACK">("MEDIAPIPE FALLBACK");
+  const [handError, setHandError] = useState<string | null>(null);
   const [handSeen, setHandSeen] = useState(false);
   const [pinch, setPinch] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
@@ -63,7 +65,7 @@ export function BlockAR() {
   const [riding, setRiding] = useState(false);
   const [pov, setPov] = useState(true);
   const [speed, setSpeed] = useState(0);
-  const [handStatus, setHandStatus] = useState<"tracking" | "pinching" | "grabbing" | "lost" | "frozen" | "reacquiring">("lost");
+  const [handStatus, setHandStatus] = useState<"tracking" | "pinching" | "grabbing" | "lost" | "frozen" | "reacquiring" | "error">("lost");
   const [capability, setCapability] = useState<CapabilityReport | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
   const lastStatusUpdate = useRef<number>(0);
@@ -174,32 +176,39 @@ export function BlockAR() {
   useEffect(() => () => stopHands.current?.(), []);
 
   async function toggleHands() {
-    if (hand === "loading") return;
+    if (hand === "starting" || hand === "initializing") return;
 
-    if (hand !== "off") {
+    if (hand === "on") {
       stopHands.current?.();
       stopHands.current = null;
       setHand("off");
       setHandSeen(false);
+      setHandError(null);
       clearHandCanvas();
       if (engine.current?.isXR()) {
         engine.current.setHandTrackingEnabled(false);
       }
       setDebouncedHandStatus("lost");
-      setToast("Hand tracking stopped");
+      setToast("Hand tracking turned off");
       return;
     }
 
-    setHand("loading");
+    setHand("starting");
+    setHandError(null);
 
+    // Primary: WebXR
     if (engine.current?.isXR()) {
+      setBackendType("WEBXR HANDS");
+      setHand("initializing");
       engine.current.setHandTrackingEnabled(true);
       setHand("on");
       setGuide(false);
-      setToast("WebXR Hand Tracking active · pinch in air to build");
+      setToast("Backend: WEBXR HANDS active · pinch to build");
       return;
     }
 
+    // Fallback: MediaPipe
+    setBackendType("MEDIAPIPE FALLBACK");
     try {
       let activeStream = streamRef.current;
       if (!activeStream || !camOk) {
@@ -210,13 +219,14 @@ export function BlockAR() {
         throw new Error("Camera could not be activated");
       }
 
+      setHand("initializing");
       if (videoRef.current && videoRef.current.srcObject !== activeStream) {
         videoRef.current.srcObject = activeStream;
         await videoRef.current.play().catch(() => {});
       }
 
       if (!videoRef.current) {
-        throw new Error("Camera video element not mounted");
+        throw new Error("Camera preview element not mounted");
       }
 
       let pinched = false;
@@ -229,7 +239,7 @@ export function BlockAR() {
           if (pinched && e) { e.synth("up", 0, 0); pinched = false; setPinch(false); }
           return;
         }
-        setDebouncedHandStatus(f.pinching ? "pinching" : "tracking");
+        setDebouncedHandStatus(f.status || (f.pinching ? "pinching" : "tracking"));
         const { x, y } = f.cursor;
         if (f.pinching && !pinched) { e?.synth("down", x, y); pinched = true; setPinch(true); }
         else if (f.pinching && pinched) e?.synth("move", x, y);
@@ -237,12 +247,13 @@ export function BlockAR() {
       });
       setHand("on");
       setGuide(false);
-      setToast("MediaPipe Hand Tracking ON · show hand to camera");
+      setToast("Backend: MEDIAPIPE FALLBACK active · show hand to camera");
     } catch (err: any) {
-      setHand("off");
-      setDebouncedHandStatus("lost");
       const reason = err?.message || "Hand tracking initialization failed";
-      setToast(reason);
+      setHand("error");
+      setHandError(reason);
+      setDebouncedHandStatus("lost");
+      setToast(`Error: ${reason}`);
     }
   }
   function clearHandCanvas() { const c = handCanvas.current; c?.getContext("2d")?.clearRect(0, 0, c.width, c.height); }
@@ -368,40 +379,35 @@ export function BlockAR() {
                 <button
                   type="button"
                   onClick={toggleHands}
-                  disabled={hand === "loading"}
+                  disabled={hand === "starting" || hand === "initializing"}
                   className={cn(
-                    "hud pointer-events-auto flex w-[96px] flex-col items-center gap-1 px-2 py-1.5 text-[10px] select-none transition-all active:scale-95",
-                    hand === "on" && "ring-2 ring-brand-violet bg-card/90",
-                    hand === "loading" && "cursor-wait opacity-70"
+                    "hud pointer-events-auto flex w-[116px] flex-col items-start gap-1 p-2 text-[10px] select-none transition-all active:scale-95 border",
+                    hand === "on" ? "border-brand-cyan bg-card/95 shadow-md" : hand === "error" ? "border-destructive bg-destructive/10" : "border-border/60 hover:border-brand-cyan/50",
+                    (hand === "starting" || hand === "initializing") && "cursor-wait opacity-70"
                   )}
                 >
-                  <div className="flex items-center gap-1.5 font-semibold uppercase tracking-wider">
-                    <Hand className={cn("h-3 w-3", hand === "on" ? "text-brand-cyan" : "text-muted-foreground")} />
+                  <div className="flex w-full items-center justify-between gap-1 font-semibold uppercase tracking-wider">
+                    <div className="flex items-center gap-1.5">
+                      <Hand className={cn("h-3.5 w-3.5", hand === "on" ? "text-brand-cyan" : "text-muted-foreground")} />
+                      <span>{hand === "off" ? "Hand: OFF" : hand === "starting" ? "Hand: STARTING" : hand === "initializing" ? "Hand: INIT" : hand === "error" ? "Hand: ERROR" : `Hand: ${handStatus.toUpperCase()}`}</span>
+                    </div>
                     <span className={cn("h-2 w-2 rounded-full", {
                       "bg-success animate-pulse": hand === "on" && handStatus === "tracking",
-                      "bg-brand-cyan": hand === "on" && handStatus === "pinching",
+                      "bg-brand-cyan animate-ping": hand === "on" && handStatus === "pinching",
                       "bg-brand-pink": hand === "on" && handStatus === "grabbing",
                       "bg-amber-400": hand === "on" && handStatus === "frozen",
                       "bg-yellow-400 animate-spin": hand === "on" && handStatus === "reacquiring",
+                      "bg-destructive": hand === "error",
                       "bg-muted-foreground": hand === "off" || handStatus === "lost",
                     })} />
-                    <span>{hand === "off" ? "HANDS" : handStatus}</span>
                   </div>
-                  <div className="flex flex-col items-center text-[9px] leading-tight">
-                    <span className={cn("font-medium", hand === "on" ? "text-brand-cyan" : "text-muted-foreground")}>
-                      {hand === "off"
-                        ? "Tap to Enable"
-                        : hand === "loading"
-                          ? "Starting…"
-                          : engine.current?.isXR()
-                            ? "WEBXR HANDS"
-                            : "MEDIAPIPE"}
+                  <div className="flex flex-col text-[8.5px] leading-tight text-muted-foreground">
+                    <span className="font-semibold text-foreground/90">
+                      {backendType}
                     </span>
-                    {hand === "on" && (
-                      <span className="text-[8px] text-muted-foreground">
-                        {handSeen || engine.current?.isXR() ? "Tracking" : "Show hand"}
-                      </span>
-                    )}
+                    <span>
+                      {hand === "off" ? "Tap to enable" : hand === "error" ? (handError?.slice(0, 24) || "Failed") : hand === "on" ? (handSeen ? "Hand detected" : "Looking for hand…") : "Please wait…"}
+                    </span>
                   </div>
                 </button>
                 <button onClick={() => setDebugOpen(!debugOpen)} className="hud pointer-events-auto px-1.5 py-0.5 text-[9px] text-muted-foreground hover:text-foreground">
