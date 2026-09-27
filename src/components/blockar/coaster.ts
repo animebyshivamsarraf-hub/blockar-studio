@@ -100,8 +100,6 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     const car = cars[i];
     car.position.copy(p).add(new THREE.Vector3(0, voxel * 0.08, 0));
     car.lookAt(p.clone().add(tan));
-    car.rotateY(Math.PI); // box faces +z
-    car.rotateY(Math.PI);
   }
 
   function step(dt: number) {

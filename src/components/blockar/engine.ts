@@ -1,9 +1,10 @@
 // @ts-nocheck -- strict index checks are noisy for this imperative three.js engine
 import * as THREE from "three";
+import { createCoaster } from "./coaster";
 
 export const VOXEL = 0.1; // 10 cm
 export type Shape = "cube" | "sphere" | "cylinder" | "pyramid";
-export type Mode = "build" | "move" | "delete" | "paint" | "group";
+export type Mode = "build" | "move" | "delete" | "paint" | "group" | "track";
 export interface Cell { x: number; y: number; z: number; shape: Shape; color: string }
 interface Change { key: string; prev: Cell | null; next: Cell | null }
 
@@ -64,6 +65,10 @@ export function createEngine(o: EngineOpts) {
     return mats.get(c)!;
   };
 
+  const coaster = createCoaster(root, VOXEL);
+  let pov = false;
+  const povPose = { pos: new THREE.Vector3(), look: new THREE.Vector3() };
+  let lastT = performance.now();
   const cells = new Map<string, Cell>();
   const meshes = new Map<string, THREE.Mesh>();
   const undo: Change[][] = [];
@@ -164,6 +169,11 @@ export function createEngine(o: EngineOpts) {
     }
     const mode = o.getMode();
     const h = hitFrom(toNdc(e));
+    if (coaster.isRiding() && pov) { drag = { kind: "orbit", x: e.clientX, y: e.clientY }; return; }
+    if (mode === "track") {
+      if (h.add) { const n = coaster.addPoint(...h.add); o.onHint(n < 2 ? "Start point set — tap more spots to lay track" : `${n} track points · stack blocks to make hills`); }
+      drag = null; return;
+    }
     if (mode === "build") {
       stroke = [];
       if (h.add) place(h.add);
@@ -288,6 +298,14 @@ export function createEngine(o: EngineOpts) {
   const tmpM = new THREE.Matrix4();
   renderer.setAnimationLoop((_t, frame?: XRFrame) => {
     const mode = o.getMode();
+    const now = performance.now(); const dt = Math.min((now - lastT) / 1000, 0.05); lastT = now;
+    coaster.step(dt);
+    if (coaster.isRiding() && pov && !renderer.xr.isPresenting) {
+      coaster.povPose(povPose);
+      camera.position.lerp(povPose.pos, 0.5); camera.lookAt(povPose.look);
+      reticle.visible = false; selBox.visible = false;
+      renderer.render(scene, camera); return;
+    }
     if (frame && hitSource && !anchored) {
       const res = frame.getHitTestResults(hitSource);
       const ref = renderer.xr.getReferenceSpace();
@@ -329,6 +347,8 @@ export function createEngine(o: EngineOpts) {
       apply(chs, "next"); commit(chs);
     },
     startXR,
+    coaster,
+    setPOV(on: boolean) { pov = on; if (!on) placeCam(); },
     undo() { const a = undo.pop(); if (a) { apply(a, "prev"); redo.push(a); emit(); } },
     redo() { const a = redo.pop(); if (a) { apply(a, "next"); undo.push(a); emit(); } },
     clear() { commit([...cells.keys()].map((key) => { const ch = { key, prev: cells.get(key)!, next: null }; setCell(key, null); return ch; })); },
