@@ -51,7 +51,7 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     if (pts.length < 2) return;
     curve = new THREE.CatmullRomCurve3(pts, loop && pts.length > 2, "centripetal", 0.5);
     length = curve.getLength();
-    const segs = Math.max(20, Math.floor(length / (voxel * 0.1)));
+    const segs = Math.max(20, Math.ceil(length / TARGET_SAMPLE));
     const frames = curve.computeFrenetFrames(segs, loop);
     const up = new THREE.Vector3(0, 1, 0);
     const gauge = 0.12;\n    const offs = gauge * 0.5;
