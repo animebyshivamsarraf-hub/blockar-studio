@@ -1,5 +1,6 @@
 // @ts-nocheck -- strict index checks are noisy for this imperative three.js engine
 import * as THREE from "three";
+import { XRHandModelFactory } from "three/addons/webxr/XRHandModelFactory.js";
 import { createCoaster } from "./coaster";
 
 export const VOXEL = 0.1; // 10 cm
@@ -24,6 +25,41 @@ export function createEngine(o: EngineOpts) {
   const renderer = new THREE.WebGLRenderer({ canvas: o.canvas, alpha: true, antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.xr.enabled = true;
+  // WebXR hand visuals are a separate 3D layer from construction/selection.
+  // Three.js uses the public WebXR Input Profiles generic-hand assets for the mesh profile.
+  const handModelFactory = new XRHandModelFactory();
+  const xrHandVisuals: THREE.Group[] = [];
+  let pinchMarker: THREE.Mesh | null = null;
+
+  function ensureXRHandVisuals() {
+    if (xrHandVisuals.length) return;
+    for (let i = 0; i < 2; i++) {
+      const hand = renderer.xr.getHand(i);
+      const model = handModelFactory.createHandModel(hand, "mesh");
+      model.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const material of materials) {
+          material.transparent = true;
+          material.opacity = 0.94;
+          if ("roughness" in material) (material as THREE.MeshStandardMaterial).roughness = 0.48;
+        }
+      });
+      hand.add(model);
+      scene.add(hand);
+      xrHandVisuals.push(hand);
+    }
+    const markerMaterial = new THREE.MeshBasicMaterial({
+      color: 0x4dff88,
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+    });
+    pinchMarker = new THREE.Mesh(new THREE.SphereGeometry(0.018, 16, 12), markerMaterial);
+    pinchMarker.visible = false;
+    scene.add(pinchMarker);
+  }
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, 1, 0.01, 50);
   scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.4));
@@ -343,6 +379,7 @@ export function createEngine(o: EngineOpts) {
     const sample = xrHandFrame(frame);
     if (!sample) {
       xrHand.seen = false;
+      if (pinchMarker) pinchMarker.visible = false;
       if (xrHand.pinching && now - (handSeenAt || 0) > XR_HAND_LOST_GRACE_MS) {
         xrHand.frozen = true;
         o.onHint("HAND LOST — CONSTRUCTION FROZEN");
@@ -352,6 +389,10 @@ export function createEngine(o: EngineOpts) {
 
     const wasFrozen = xrHand.frozen;
     xrHand.seen = true;
+    if (pinchMarker) {
+      pinchMarker.position.copy(root.localToWorld(sample.local.clone()));
+      pinchMarker.visible = sample.pinch;
+    }
     handSeenAt = now;
     if (wasFrozen) {
       xrHand.reacquireFrames++;
@@ -465,6 +506,7 @@ export function createEngine(o: EngineOpts) {
         }
       }
       xrHand.pinching = false;
+      if (pinchMarker) pinchMarker.visible = false;
       xrHand.grabOffset = null;
       xrHand.grabKeys = [];
       xrHand.lastLocal = null;
@@ -482,6 +524,7 @@ export function createEngine(o: EngineOpts) {
       domOverlay: { root: overlay },
     } as XRSessionInit);
     xrSession = session;
+    ensureXRHandVisuals();
     renderer.xr.setReferenceSpaceType("local");
     await renderer.xr.setSession(session);
     xrReferenceSpace = renderer.xr.getReferenceSpace() ?? await session.requestReferenceSpace("local");
@@ -509,6 +552,7 @@ export function createEngine(o: EngineOpts) {
       hitSource = null; xrSession = null; xrReferenceSpace = null;
       anchored = false;
       xrHand.seen = false; xrHand.pinching = false; xrHand.frozen = false; xrHand.lastLocal = null;
+      if (pinchMarker) pinchMarker.visible = false;
       root.position.set(0, 0, 0); root.quaternion.identity(); grid.visible = true; placeCam();
     });
   }
