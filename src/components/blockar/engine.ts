@@ -33,7 +33,7 @@ export function createEngine(o: EngineOpts) {
 
   const root = new THREE.Group();
   scene.add(root);
-  const grid = new THREE.GridHelper(2, 20, 0x3ee8ff, 0x2a6a80);
+  const grid = new THREE.GridHelper(4, 40, 0x3ee8ff, 0x2a6a80);
   (grid.material as THREE.Material).transparent = true;
   (grid.material as THREE.Material).opacity = 0.35;
   root.add(grid);

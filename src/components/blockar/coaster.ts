@@ -146,10 +146,11 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     step,
     /** first-person camera pose in world space */
     povPose(out: { pos: THREE.Vector3; look: THREE.Vector3 }) {
-      const car = cars[0];
-      car.updateWorldMatrix(true, false);
-      out.pos.copy(car.localToWorld(new THREE.Vector3(0, voxel * 0.9, 0)));
-      out.look.copy(car.localToWorld(new THREE.Vector3(0, voxel * 0.7, voxel * 3)));
+      const w = (d: number) => { const t = d / length; return curve!.getPointAt(loop ? ((t % 1) + 1) % 1 : Math.min(Math.max(t, 0), 1)); };
+      const p = w(s), f = w(s + voxel * 4);
+      out.pos.copy(p).add(new THREE.Vector3(0, voxel * 0.9, 0));
+      out.look.copy(f).add(new THREE.Vector3(0, voxel * 0.4, 0));
+      root.localToWorld(out.pos); root.localToWorld(out.look);
     },
     serialize: () => ({ loop, pts: pts.map((p) => ({ x: p.x, y: p.y, z: p.z })) }),
     load(d?: { loop?: boolean; pts?: TrackPoint[] }) {
