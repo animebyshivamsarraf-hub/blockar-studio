@@ -4,7 +4,7 @@ import { COLORS, createEngine, type Engine, type Mode, type Shape } from "./engi
 import { cn } from "@/lib/utils";
 import { startHands, type HandFrame } from "./hands";
 import { aiBuild } from "@/lib/ai-build.functions";
-import { Sparkles, Loader2, X } from "lucide-react";
+import { Sparkles, Loader2, X, Spline, Play, Square, ArrowUp, ArrowDown, Repeat, Eye, Wand2 } from "lucide-react";
 
 type Stage = "welcome" | "permission" | "scanning" | "build";
 const SAVE_KEY = "blockar:world";
@@ -21,6 +21,11 @@ const MODES: { id: Mode; label: string; Icon: typeof Box; hint: string }[] = [
   { id: "delete", label: "Delete", Icon: Trash2, hint: "Tap or swipe across blocks to delete" },
   { id: "paint", label: "Paint", Icon: Paintbrush, hint: "Tap or swipe blocks to repaint with selected color" },
   { id: "group", label: "Group", Icon: Group, hint: "Drag a structure to move all connected blocks" },
+  { id: "track", label: "Track", Icon: Spline, hint: "Tap spots to lay coaster track · tap on blocks for hills" },
+];
+const DEMO = [
+  { x: -6, y: 0, z: 4 }, { x: -2, y: 0, z: 5 }, { x: 3, y: 2, z: 5 }, { x: 6, y: 7, z: 3 }, { x: 7, y: 8, z: -1 },
+  { x: 4, y: 3, z: -5 }, { x: 0, y: 1, z: -6 }, { x: -3, y: 4, z: -4 }, { x: -2, y: 5, z: 0 }, { x: -6, y: 2, z: 1 },
 ];
 
 function Logo({ className }: { className?: string }) {
@@ -51,6 +56,11 @@ export function BlockAR() {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiText, setAiText] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const [trackN, setTrackN] = useState(0);
+  const [loop, setLoop] = useState(true);
+  const [riding, setRiding] = useState(false);
+  const [pov, setPov] = useState(true);
+  const [speed, setSpeed] = useState(0);
   const handCanvas = useRef<HTMLCanvasElement>(null);
   const stopHands = useRef<(() => void) | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -159,11 +169,35 @@ export function BlockAR() {
     setAiBusy(false);
   }
 
-  const save = () => { localStorage.setItem(SAVE_KEY, JSON.stringify(engine.current?.serialize() ?? [])); setToast("World saved"); };
+  const co = () => engine.current?.coaster;
+  const syncTrack = () => setTrackN(co()?.count() ?? 0);
+  useEffect(() => {
+    if (!riding) return;
+    const id = setInterval(() => setSpeed(co()?.speedKmh() ?? 0), 200);
+    return () => clearInterval(id);
+  }, [riding]);
+  useEffect(() => {
+    if (stage !== "build" || !canvasRef.current) return;
+    const c = canvasRef.current; const f = () => setTimeout(syncTrack, 0);
+    c.addEventListener("pointerup", f); return () => c.removeEventListener("pointerup", f);
+  }, [stage]);
+  useEffect(() => { co()?.setLoop(loop); }, [loop, stage]);
+  function ride() {
+    const c = co(); if (!c) return;
+    if (riding) { c.stop(); engine.current?.setPOV(false); setRiding(false); return; }
+    if (!c.start()) return setToast("Lay at least 2 track points first");
+    engine.current?.setPOV(pov); setRiding(true); setGuide(false);
+  }
+  function togglePov() { const n = !pov; setPov(n); if (riding) { engine.current?.setPOV(n); } }
+
+  const save = () => { localStorage.setItem(SAVE_KEY, JSON.stringify({ blocks: engine.current?.serialize() ?? [], track: co()?.serialize() })); setToast("World saved"); };
   const load = () => {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return setToast("No saved world yet");
-    engine.current?.load(JSON.parse(raw)); setToast("World loaded");
+    const d = JSON.parse(raw);
+    engine.current?.load(Array.isArray(d) ? d : d.blocks ?? []);
+    if (!Array.isArray(d) && d.track) { co()?.load(d.track); setLoop(!!d.track.loop); }
+    syncTrack(); setToast("World loaded");
   };
 
   const activeMode = MODES.find((m) => m.id === mode)!;
@@ -269,7 +303,7 @@ export function BlockAR() {
           </div>
 
           <div className="flex-1" />
-          {aiOpen ? (
+          {riding ? null : aiOpen ? (
             <form onSubmit={(e) => { e.preventDefault(); runAI(); }} className="hud pointer-events-auto mb-2 flex items-center gap-2 p-2">
               <Sparkles className="ml-1 h-5 w-5 shrink-0 text-brand-pink" />
               <input autoFocus value={aiText} onChange={(e) => setAiText(e.target.value)} maxLength={300} placeholder="Type anything… a house, a tree, a car" className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-muted-foreground" />
@@ -279,11 +313,34 @@ export function BlockAR() {
           ) : (
             <button onClick={() => setAiOpen(true)} className="pointer-events-auto mx-auto mb-2 flex items-center gap-2 rounded-full bg-gradient-to-r from-brand-violet to-brand-pink px-4 py-2 text-sm font-semibold text-primary-foreground shadow-lg"><Sparkles className="h-4 w-4" />AI Build</button>
           )}
+          {mode === "track" && !riding && (
+            <div className="hud pointer-events-auto mb-2 flex items-center justify-between gap-1 p-1.5 text-[10px]">
+              {[
+                { l: "Hill up", I: ArrowUp, f: () => co()?.raiseLast(1), ok: trackN > 0 },
+                { l: "Down", I: ArrowDown, f: () => co()?.raiseLast(-1), ok: trackN > 0 },
+                { l: "Undo pt", I: Undo2, f: () => { co()?.removeLast(); syncTrack(); }, ok: trackN > 0 },
+                { l: loop ? "Loop on" : "Loop off", I: Repeat, f: () => setLoop(!loop), ok: true },
+                { l: "Demo", I: Wand2, f: () => { co()?.loadGrid(DEMO, true); setLoop(true); syncTrack(); setToast("Demo coaster built — press Ride!"); }, ok: true },
+                { l: "Clear", I: Trash2, f: () => { co()?.clear(); syncTrack(); }, ok: trackN > 0 },
+              ].map(({ l, I, f, ok }) => (
+                <button key={l} onClick={f} disabled={!ok} className="flex flex-1 flex-col items-center gap-0.5 rounded-lg py-1.5 disabled:opacity-35 active:bg-accent"><I className="h-4 w-4 text-brand-cyan" />{l}</button>
+              ))}
+            </div>
+          )}
+          {(trackN >= 2 || riding) && (
+            <div className="pointer-events-auto mx-auto mb-2 flex items-center gap-2">
+              <button onClick={ride} className={cn("flex items-center gap-2 rounded-full px-5 py-2.5 font-display text-sm font-semibold shadow-lg", riding ? "bg-destructive text-destructive-foreground" : "bg-success text-background")}>
+                {riding ? <><Square className="h-4 w-4" />Stop</> : <><Play className="h-4 w-4" />Ride</>}
+              </button>
+              <button onClick={togglePov} className="hud flex items-center gap-1.5 px-3 py-2.5 text-xs"><Eye className="h-4 w-4 text-brand-cyan" />{pov ? "First person" : "Watch"}</button>
+              {riding && <div className="hud px-3 py-2.5 font-display text-sm font-semibold tabular-nums">{speed} km/h</div>}
+            </div>
+          )}
           {toast && <div className="mx-auto mb-2 rounded-full bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground">{toast}</div>}
 
           {/* bottom */}
-          <div className="pointer-events-auto flex flex-col gap-2">
-            <div className="flex gap-2">
+          <div className={cn("pointer-events-auto flex flex-col gap-2", riding && pov && "hidden")}>
+            <div className={cn("flex gap-2", mode === "track" && "hidden")}>
               <div className="hud flex flex-1 justify-between p-1.5">
                 {SHAPES.map(({ id, label, Icon }) => (
                   <button key={id} onClick={() => setShape(id)} className={cn("flex flex-1 flex-col items-center gap-0.5 rounded-xl py-1.5 text-[10px]", shape === id ? "bg-primary/25 text-foreground ring-1 ring-brand-cyan" : "text-muted-foreground")}>
