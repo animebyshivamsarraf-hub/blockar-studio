@@ -10,8 +10,14 @@ export class GrabController3D {
   private grabbedKeys: string[] = [];
   private isGrabbing = false;
   private isFrozen = false;
+  private activeHand: "left" | "right" | "both" = "right";
   private lastValidLocalPosition: THREE.Vector3 | null = null;
   private lastValidPinchPoint: THREE.Vector3 | null = null;
+
+  // Two-hand transform tracking
+  private initialTwoHandDistance: number | null = null;
+  private initialTwoHandAngle: number | null = null;
+  private isTwoHandScaling = false;
 
   /**
    * Initializes grab maintaining initial object relative position.
@@ -21,12 +27,14 @@ export class GrabController3D {
   startGrab(
     pinchLocalPoint: THREE.Vector3,
     objectLocalCenter: THREE.Vector3,
-    keys: string[]
+    keys: string[],
+    hand: "left" | "right" = "right"
   ): THREE.Vector3 {
     this.grabOffset = objectLocalCenter.clone().sub(pinchLocalPoint);
     this.grabbedKeys = [...keys];
     this.isGrabbing = true;
     this.isFrozen = false;
+    this.activeHand = hand;
     this.lastValidPinchPoint = pinchLocalPoint.clone();
     this.lastValidLocalPosition = pinchLocalPoint.clone().add(this.grabOffset);
     return this.grabOffset.clone();
@@ -52,6 +60,30 @@ export class GrabController3D {
   }
 
   /**
+   * Handles two-hand scale and rotation gestures when both hands are pinching.
+   */
+  startTwoHandTransform(distance: number, angleRad: number) {
+    this.initialTwoHandDistance = Math.max(0.01, distance);
+    this.initialTwoHandAngle = angleRad;
+    this.isTwoHandScaling = true;
+  }
+
+  updateTwoHandTransform(currentDistance: number, currentAngleRad: number): { scaleDelta: number; angleDelta: number } | null {
+    if (!this.isTwoHandScaling || this.initialTwoHandDistance === null || this.initialTwoHandAngle === null) {
+      return null;
+    }
+    const scaleDelta = currentDistance / this.initialTwoHandDistance;
+    const angleDelta = currentAngleRad - this.initialTwoHandAngle;
+    return { scaleDelta, angleDelta };
+  }
+
+  endTwoHandTransform() {
+    this.isTwoHandScaling = false;
+    this.initialTwoHandDistance = null;
+    this.initialTwoHandAngle = null;
+  }
+
+  /**
    * Freezes grabbed position when tracking confidence drops or hand is lost.
    */
   freeze() {
@@ -63,7 +95,6 @@ export class GrabController3D {
    */
   rebase(newPinchLocalPoint: THREE.Vector3) {
     if (!this.isGrabbing || !this.lastValidLocalPosition) return;
-    // Recalculate offset so the object remains at its frozen position
     this.grabOffset = this.lastValidLocalPosition.clone().sub(newPinchLocalPoint);
     this.lastValidPinchPoint = newPinchLocalPoint.clone();
     this.isFrozen = false;
@@ -81,6 +112,7 @@ export class GrabController3D {
     this.grabOffset = null;
     this.lastValidLocalPosition = null;
     this.lastValidPinchPoint = null;
+    this.endTwoHandTransform();
     return { keys, finalOffset };
   }
 
@@ -94,6 +126,14 @@ export class GrabController3D {
 
   get keys(): string[] {
     return this.grabbedKeys;
+  }
+
+  get hand(): "left" | "right" | "both" {
+    return this.activeHand;
+  }
+
+  get isScaling(): boolean {
+    return this.isTwoHandScaling;
   }
 
   get currentOffset(): THREE.Vector3 | null {

@@ -2,6 +2,7 @@
 import * as THREE from "three";
 import { XRHandModelFactory } from "three/addons/webxr/XRHandModelFactory.js";
 import { GestureDetector } from "./hand/GestureDetector";
+import { HandController3D } from "./hand/HandController3D";
 import { GrabController3D } from "./interaction/GrabController3D";
 import { deviceTelemetry } from "./device/CapabilityDetector";
 import { createCoaster } from "./coaster";
