@@ -15,7 +15,7 @@ export function createCoaster(root: THREE.Group, voxel: number) {
   let length = 0;
   let loop = false;
 
-  const railMat = new THREE.MeshStandardMaterial({ color: "#ff3b4a", roughness: 0.35, metalness: 0.5 });
+  const TARGET_SAMPLE = 0.05;\n  const RAIL_RADIUS = 0.012;\n  const SPINE_RADIUS = 0.016;\n  const TIE_SPACING = 0.15;\n\n  const railMat = new THREE.MeshStandardMaterial({ color: "#ff3b4a", roughness: 0.35, metalness: 0.5 });
   const tieMat = new THREE.MeshStandardMaterial({ color: "#3a3f4a", roughness: 0.7 });
   const supMat = new THREE.MeshStandardMaterial({ color: "#ffc22e", roughness: 0.5, metalness: 0.2 });
   const markMat = new THREE.MeshBasicMaterial({ color: "#4dff88" });
@@ -54,7 +54,7 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     const segs = Math.max(20, Math.floor(length / (voxel * 0.1)));
     const frames = curve.computeFrenetFrames(segs, loop);
     const up = new THREE.Vector3(0, 1, 0);
-    const offs = voxel * 0.22;
+    const gauge = 0.12;\n    const offs = gauge * 0.5;
     const left: THREE.Vector3[] = [], right: THREE.Vector3[] = [];
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
@@ -64,7 +64,7 @@ export function createCoaster(root: THREE.Group, voxel: number) {
       if (side.lengthSq() < 1e-4) side.copy(frames.binormals[i]);
       side.normalize().multiplyScalar(offs);
       left.push(p.clone().add(side)); right.push(p.clone().sub(side));
-      if (i % 3 === 0) {
+      if (Math.floor(i * (length / Math.max(1,segs)) / TIE_SPACING) !== Math.floor((i-1) * (length / Math.max(1,segs)) / TIE_SPACING)) {
         const tie = new THREE.Mesh(new THREE.BoxGeometry(offs * 2.4, voxel * 0.05, voxel * 0.08), tieMat);
         tie.position.copy(p);
         tie.lookAt(p.clone().add(tan));
@@ -79,9 +79,9 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     }
     for (const side of [left, right]) {
       const c = new THREE.CatmullRomCurve3(side, loop && pts.length > 2);
-      group.add(new THREE.Mesh(new THREE.TubeGeometry(c, segs, voxel * 0.05, 6, loop && pts.length > 2), railMat));
+      group.add(new THREE.Mesh(new THREE.TubeGeometry(c, segs, RAIL_RADIUS, 6, loop && pts.length > 2), railMat));
     }
-    const spine = new THREE.TubeGeometry(curve, segs, voxel * 0.07, 6, loop && pts.length > 2);
+    const spine = new THREE.TubeGeometry(curve, segs, SPINE_RADIUS, 6, loop && pts.length > 2);
     group.add(new THREE.Mesh(spine, tieMat));
   }
 
