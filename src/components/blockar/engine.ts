@@ -440,7 +440,30 @@ export function createEngine(o: EngineOpts) {
         }
       }
     } else if (!sample.pinch && wasPinching) {
-      if (o.getMode() === "build" && stroke) { commit(stroke); stroke = null; }
+      if (o.getMode() === "build" && stroke) {
+        commit(stroke);
+        stroke = null;
+      } else if ((o.getMode() === "move" || o.getMode() === "group") && xrHand.grabKeys.length && xrHand.lastLocal && xrHand.grabOffset) {
+        const base = cells.get(xrHand.grabKeys[0]!);
+        if (base) {
+          const target = xrHand.lastLocal.clone().add(xrHand.grabOffset);
+          const q = snapLocal(target);
+          const dx = q.x - base.x, dy = q.y - base.y, dz = q.z - base.z;
+          const set = new Set(xrHand.grabKeys);
+          const moved = xrHand.grabKeys.map(key => {
+            const c = cells.get(key)!;
+            return { ...c, x:c.x+dx, y:Math.max(0,c.y+dy), z:c.z+dz };
+          });
+          const blocked = moved.some(c => { const nk=k(c.x,c.y,c.z); return cells.has(nk) && !set.has(nk); });
+          if ((dx || dy || dz) && !blocked) {
+            const removes: Change[] = xrHand.grabKeys.map(key => ({ key, prev: cells.get(key)!, next: null }));
+            const adds: Change[] = moved.map(c => ({ key:k(c.x,c.y,c.z), prev:null, next:c }));
+            apply(removes, "next");
+            apply(adds, "next");
+            commit([...removes, ...adds]);
+          }
+        }
+      }
       xrHand.pinching = false;
       xrHand.grabOffset = null;
       xrHand.grabKeys = [];
