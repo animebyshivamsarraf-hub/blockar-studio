@@ -56,12 +56,7 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     if (pts.length < 2) return;
     curve = new THREE.CatmullRomCurve3(pts, loop && pts.length > 2, "centripetal", 0.5);
     length = curve.getLength();
-  const TARGET_SAMPLE = 0.05;
-  const RAIL_RADIUS = 0.012;
-  const SPINE_RADIUS = 0.016;
-  const TIE_SPACING = 0.15;
-
-  const railMat = new THREE.MeshStandardMaterial({ color: "#ff3b4a", roughness: 0.35, metalness: 0.5 });
+    const segs = Math.max(12, Math.round(length / TARGET_SAMPLE));
     const frames = curve.computeFrenetFrames(segs, loop);
     const up = new THREE.Vector3(0, 1, 0);
     const gauge = 0.12;

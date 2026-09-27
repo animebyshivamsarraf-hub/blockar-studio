@@ -1,3 +1,5 @@
+import { detectDeviceCapabilities, deviceTelemetry, type CapabilityReport } from "./device/CapabilityDetector";
+import { FALLBACK_LIMITATION } from "./hand/MediaPipeFallbackAdapter";
 import { useEffect, useRef, useState } from "react";
 import { Box, Camera, Check, Circle, Cylinder, Hand, Move, Paintbrush, Redo2, Save, FolderOpen, Trash2, Triangle, Undo2, Group, ScanLine, Pointer } from "lucide-react";
 import { COLORS, createEngine, type Engine, type Mode, type Shape } from "./engine";
@@ -61,6 +63,28 @@ export function BlockAR() {
   const [riding, setRiding] = useState(false);
   const [pov, setPov] = useState(true);
   const [speed, setSpeed] = useState(0);
+  const [handStatus, setHandStatus] = useState<"tracking" | "pinching" | "grabbing" | "lost" | "frozen" | "reacquiring">("lost");
+  const [capability, setCapability] = useState<CapabilityReport | null>(null);
+  const [debugOpen, setDebugOpen] = useState(false);
+  const lastStatusUpdate = useRef<number>(0);
+  const pendingStatus = useRef<string | null>(null);
+
+  // Debounced hand status updater (prevents UI flicker)
+  const setDebouncedHandStatus = (status: "tracking" | "pinching" | "grabbing" | "lost" | "frozen" | "reacquiring") => {
+    const now = performance.now();
+    pendingStatus.current = status;
+    if (now - lastStatusUpdate.current > 120 || status === "frozen" || status === "grabbing") {
+      lastStatusUpdate.current = now;
+      setHandStatus(status);
+    } else {
+      setTimeout(() => {
+        if (pendingStatus.current === status) {
+          lastStatusUpdate.current = performance.now();
+          setHandStatus(status);
+        }
+      }, 120);
+    }
+  };
   const handCanvas = useRef<HTMLCanvasElement>(null);
   const stopHands = useRef<(() => void) | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -72,8 +96,10 @@ export function BlockAR() {
   sel.current = { mode, shape, color };
 
   useEffect(() => {
-    const xr = (navigator as Navigator & { xr?: XRSystem }).xr;
-    xr?.isSessionSupported("immersive-ar").then(setXrOk).catch(() => setXrOk(false));
+    detectDeviceCapabilities().then((cap) => {
+      setCapability(cap);
+      setXrOk(cap.immersiveArSupported);
+    }).catch(() => setXrOk(false));
     return () => streamRef.current?.getTracks().forEach((t) => t.stop());
   }, []);
 
@@ -86,6 +112,7 @@ export function BlockAR() {
       getColor: () => sel.current.color,
       onChange: setInfo,
       onHint: setHint,
+      onHandStatus: (status) => setDebouncedHandStatus(status),
     });
     engine.current = e;
     return () => { e.dispose(); engine.current = null; };
@@ -104,10 +131,18 @@ export function BlockAR() {
   async function allowCamera() {
     setCamErr(null);
     try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" } }, audio: false });
+      let s: MediaStream;
+      try {
+        // Enforce rear camera
+        s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" } }, audio: false });
+      } catch {
+        // Soft fallback to ideal environment, but NEVER user/front camera
+        s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+      }
       streamRef.current = s; setCamOk(true);
+      deviceTelemetry.log("fallback_selected", { mode: "rear_camera_video" });
     } catch {
-      setCamErr("Camera blocked or unavailable — you can still build on the virtual floor.");
+      setCamErr("Rear camera access denied or unavailable. Front camera is strictly disabled for MR alignment.");
     }
     setStage("scanning");
     setTimeout(() => setStage("build"), 1800);
@@ -263,14 +298,28 @@ export function BlockAR() {
                   <div className="mt-1 text-[10px] text-muted-foreground">tap to hide</div>
                 </button>
               )}
-              <button onClick={toggleHands} className={cn("hud pointer-events-auto flex w-[76px] flex-col items-center gap-1 px-2 py-2 text-[11px]", hand === "on" && "ring-1 ring-brand-violet")}>
-                {hand === "loading" ? <Loader2 className="h-5 w-5 animate-spin text-brand-violet" /> : <Hand className="h-5 w-5 text-brand-violet" />}
-                <span className="font-medium">{hand === "off" ? "Hand: Off" : hand === "loading" ? "Loading" : handSeen ? "Tracking" : "No hand"}</span>
-                <span className={cn("flex items-center gap-1", hand === "on" && handSeen ? "text-success" : "text-muted-foreground")}>
-                  <span className={cn("h-1.5 w-1.5 rounded-full", hand === "on" && handSeen ? "bg-success" : "bg-muted-foreground")} />
-                  {hand === "off" ? "Tap to use" : pinch ? "Pinching" : "Pinch ready"}
-                </span>
-              </button>
+              {/* Hand Status & HUD */}
+              <div className="flex flex-col gap-1">
+                <button onClick={toggleHands} className={cn("hud pointer-events-auto flex w-[84px] flex-col items-center gap-1 px-2 py-1.5 text-[10px]", hand === "on" && "ring-1 ring-brand-violet")}>
+                  <div className="flex items-center gap-1 font-semibold uppercase tracking-wider">
+                    <span className={cn("h-2 w-2 rounded-full", {
+                      "bg-success animate-pulse": handStatus === "tracking",
+                      "bg-brand-cyan": handStatus === "pinching",
+                      "bg-brand-pink": handStatus === "grabbing",
+                      "bg-amber-400": handStatus === "frozen",
+                      "bg-yellow-400 animate-spin": handStatus === "reacquiring",
+                      "bg-muted-foreground": handStatus === "lost",
+                    })} />
+                    <span>{handStatus}</span>
+                  </div>
+                  <span className="text-[9px] text-muted-foreground">
+                    {hand === "off" ? "Hand: Off" : hand === "loading" ? "Loading" : handSeen ? "Active" : "No hand"}
+                  </span>
+                </button>
+                <button onClick={() => setDebugOpen(!debugOpen)} className="hud pointer-events-auto px-1.5 py-0.5 text-[9px] text-muted-foreground hover:text-foreground">
+                  {debugOpen ? "Hide Dev Logs" : "Dev Test Logs"}
+                </button>
+              </div>
               <div className="hud pointer-events-auto flex w-[76px] flex-col items-center gap-1 p-1.5 text-[10px]">
                 <span className="text-muted-foreground">Block size</span>
                 <div className="flex gap-1">
@@ -303,6 +352,26 @@ export function BlockAR() {
           </div>
 
           <div className="flex-1" />
+          {debugOpen && (
+            <div className="hud pointer-events-auto mb-2 max-h-40 overflow-y-auto p-2 font-mono text-[10px] text-foreground/80">
+              <div className="flex items-center justify-between font-bold text-foreground">
+                <span>Developer Test Diagnostics</span>
+                <button onClick={() => setDebugOpen(false)}><X className="h-3 w-3" /></button>
+              </div>
+              <div className="mt-1 space-y-0.5">
+                <div>Backend: {capability?.backend || "detecting..."}</div>
+                <div>WebXR: {capability?.webxrSupported ? "YES" : "NO"} | AR: {capability?.immersiveArSupported ? "YES" : "NO"} | Hands: {capability?.handTrackingSupported ? "YES" : "NO"}</div>
+                <div>Rear Camera: {capability?.rearCameraAvailable ? "YES" : "NO"}</div>
+                {capability?.backend === "fallback-rear" && (
+                  <div className="text-amber-400">{FALLBACK_LIMITATION}</div>
+                )}
+                <div className="font-semibold text-brand-cyan mt-1">Telemetry Events:</div>
+                {deviceTelemetry.getLogs().slice(-5).map((l, idx) => (
+                  <div key={idx} className="text-[9px] text-muted-foreground">[{Math.round(l.timestamp)}ms] {l.event}</div>
+                ))}
+              </div>
+            </div>
+          )}
           {riding ? null : aiOpen ? (
             <form onSubmit={(e) => { e.preventDefault(); runAI(); }} className="hud pointer-events-auto mb-2 flex items-center gap-2 p-2">
               <Sparkles className="ml-1 h-5 w-5 shrink-0 text-brand-pink" />
