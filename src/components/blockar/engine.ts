@@ -382,6 +382,7 @@ export function createEngine(o: EngineOpts) {
       if (pinchMarker) pinchMarker.visible = false;
       if (xrHand.pinching && now - (handSeenAt || 0) > XR_HAND_LOST_GRACE_MS) {
         xrHand.frozen = true;
+        o.onHandStatus?.("frozen");
         o.onHint("HAND LOST — CONSTRUCTION FROZEN");
       }
       return;
@@ -406,6 +407,8 @@ export function createEngine(o: EngineOpts) {
 
     const wasPinching = xrHand.pinching;
     xrHand.pinching = sample.pinch;
+    if (sample.pinch && !xrHand.grabKeys.length) o.onHandStatus?.("pinching");
+    else if (!sample.pinch && !xrHand.frozen) o.onHandStatus?.("tracking");
 
     if (sample.pinch && !wasPinching) {
       xrHand.grabOffset = null;
@@ -426,6 +429,7 @@ export function createEngine(o: EngineOpts) {
           const objectLocal = new THREE.Vector3(c.x * VOXEL, c.y * VOXEL + VOXEL / 2, c.z * VOXEL);
           xrHand.grabOffset = objectLocal.sub(sample.local);
           xrHand.grabKeys = o.getMode() === "group" ? connected(key) : [key];
+          o.onHandStatus?.("grabbing");
           o.onHint("Grabbed — move your hand in 3D");
         }
       } else {

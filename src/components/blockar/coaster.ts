@@ -15,7 +15,12 @@ export function createCoaster(root: THREE.Group, voxel: number) {
   let length = 0;
   let loop = false;
 
-  const TARGET_SAMPLE = 0.05;\n  const RAIL_RADIUS = 0.012;\n  const SPINE_RADIUS = 0.016;\n  const TIE_SPACING = 0.15;\n\n  const railMat = new THREE.MeshStandardMaterial({ color: "#ff3b4a", roughness: 0.35, metalness: 0.5 });
+  const TARGET_SAMPLE = 0.05;
+  const RAIL_RADIUS = 0.012;
+  const SPINE_RADIUS = 0.016;
+  const TIE_SPACING = 0.15;
+
+  const railMat = new THREE.MeshStandardMaterial({ color: "#ff3b4a", roughness: 0.35, metalness: 0.5 });
   const tieMat = new THREE.MeshStandardMaterial({ color: "#3a3f4a", roughness: 0.7 });
   const supMat = new THREE.MeshStandardMaterial({ color: "#ffc22e", roughness: 0.5, metalness: 0.2 });
   const markMat = new THREE.MeshBasicMaterial({ color: "#4dff88" });
@@ -51,10 +56,16 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     if (pts.length < 2) return;
     curve = new THREE.CatmullRomCurve3(pts, loop && pts.length > 2, "centripetal", 0.5);
     length = curve.getLength();
-    const segs = Math.max(20, Math.ceil(length / TARGET_SAMPLE));
+  const TARGET_SAMPLE = 0.05;
+  const RAIL_RADIUS = 0.012;
+  const SPINE_RADIUS = 0.016;
+  const TIE_SPACING = 0.15;
+
+  const railMat = new THREE.MeshStandardMaterial({ color: "#ff3b4a", roughness: 0.35, metalness: 0.5 });
     const frames = curve.computeFrenetFrames(segs, loop);
     const up = new THREE.Vector3(0, 1, 0);
-    const gauge = 0.12;\n    const offs = gauge * 0.5;
+    const gauge = 0.12;
+    const offs = gauge * 0.5;
     const left: THREE.Vector3[] = [], right: THREE.Vector3[] = [];
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
