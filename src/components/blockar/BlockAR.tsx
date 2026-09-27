@@ -128,24 +128,37 @@ export function BlockAR() {
   useEffect(() => { setHint(null); }, [mode]);
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 1800); return () => clearTimeout(t); }, [toast]);
 
-  async function allowCamera() {
+  async function allowCamera(): Promise<MediaStream | null> {
     setCamErr(null);
     try {
       let s: MediaStream;
       try {
-        // Enforce rear camera
         s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" } }, audio: false });
       } catch {
-        // Soft fallback to ideal environment, but NEVER user/front camera
-        s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+        try {
+          s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+        } catch {
+          s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        }
       }
-      streamRef.current = s; setCamOk(true);
+      streamRef.current = s;
+      setCamOk(true);
+      if (videoRef.current) {
+        videoRef.current.srcObject = s;
+        await videoRef.current.play().catch(() => {});
+      }
       deviceTelemetry.log("fallback_selected", { mode: "rear_camera_video" });
-    } catch {
-      setCamErr("Rear camera access denied or unavailable. Front camera is strictly disabled for MR alignment.");
+      setStage("scanning");
+      setTimeout(() => setStage("build"), 1800);
+      return s;
+    } catch (err: any) {
+      const errMsg = err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError"
+        ? "Camera permission denied. Allow camera in browser settings."
+        : "Rear camera unavailable. Please check device permissions.";
+      setCamErr(errMsg);
+      setToast(errMsg);
+      throw new Error(errMsg);
     }
-    setStage("scanning");
-    setTimeout(() => setStage("build"), 1800);
   }
 
   async function enterXR() {
@@ -161,24 +174,76 @@ export function BlockAR() {
   useEffect(() => () => stopHands.current?.(), []);
 
   async function toggleHands() {
-    if (hand !== "off") { stopHands.current?.(); stopHands.current = null; setHand("off"); setHandSeen(false); clearHandCanvas(); return; }
-    if (!camOk || !videoRef.current) { setToast("Hand control needs the back camera — allow it first"); return; }
+    if (hand === "loading") return;
+
+    if (hand !== "off") {
+      stopHands.current?.();
+      stopHands.current = null;
+      setHand("off");
+      setHandSeen(false);
+      clearHandCanvas();
+      if (engine.current?.isXR()) {
+        engine.current.setHandTrackingEnabled(false);
+      }
+      setDebouncedHandStatus("lost");
+      setToast("Hand tracking stopped");
+      return;
+    }
+
     setHand("loading");
-    let pinched = false;
+
+    if (engine.current?.isXR()) {
+      engine.current.setHandTrackingEnabled(true);
+      setHand("on");
+      setGuide(false);
+      setToast("WebXR Hand Tracking active · pinch in air to build");
+      return;
+    }
+
     try {
+      let activeStream = streamRef.current;
+      if (!activeStream || !camOk) {
+        setToast("Requesting camera for hand tracking…");
+        activeStream = await allowCamera();
+      }
+      if (!activeStream) {
+        throw new Error("Camera could not be activated");
+      }
+
+      if (videoRef.current && videoRef.current.srcObject !== activeStream) {
+        videoRef.current.srcObject = activeStream;
+        await videoRef.current.play().catch(() => {});
+      }
+
+      if (!videoRef.current) {
+        throw new Error("Camera video element not mounted");
+      }
+
+      let pinched = false;
       stopHands.current = await startHands(videoRef.current, (f: HandFrame | null) => {
         setHandSeen(!!f);
         drawHand(f);
         const e = engine.current;
-        if (!f) { if (pinched && e) { e.synth("up", 0, 0); pinched = false; setPinch(false); } return; }
+        if (!f) {
+          setDebouncedHandStatus("lost");
+          if (pinched && e) { e.synth("up", 0, 0); pinched = false; setPinch(false); }
+          return;
+        }
+        setDebouncedHandStatus(f.pinching ? "pinching" : "tracking");
         const { x, y } = f.cursor;
         if (f.pinching && !pinched) { e?.synth("down", x, y); pinched = true; setPinch(true); }
         else if (f.pinching && pinched) e?.synth("move", x, y);
         else if (!f.pinching && pinched) { e?.synth("up", x, y); pinched = false; setPinch(false); }
       });
-      setHand("on"); setGuide(false);
-      setToast("Show your hand to the camera · pinch to grab");
-    } catch { setHand("off"); setToast("Hand tracking couldn't start on this device"); }
+      setHand("on");
+      setGuide(false);
+      setToast("MediaPipe Hand Tracking ON · show hand to camera");
+    } catch (err: any) {
+      setHand("off");
+      setDebouncedHandStatus("lost");
+      const reason = err?.message || "Hand tracking initialization failed";
+      setToast(reason);
+    }
   }
   function clearHandCanvas() { const c = handCanvas.current; c?.getContext("2d")?.clearRect(0, 0, c.width, c.height); }
   function drawHand(f: HandFrame | null) {
@@ -300,21 +365,44 @@ export function BlockAR() {
               )}
               {/* Hand Status & HUD */}
               <div className="flex flex-col gap-1">
-                <button onClick={toggleHands} className={cn("hud pointer-events-auto flex w-[84px] flex-col items-center gap-1 px-2 py-1.5 text-[10px]", hand === "on" && "ring-1 ring-brand-violet")}>
-                  <div className="flex items-center gap-1 font-semibold uppercase tracking-wider">
+                <button
+                  type="button"
+                  onClick={toggleHands}
+                  disabled={hand === "loading"}
+                  className={cn(
+                    "hud pointer-events-auto flex w-[96px] flex-col items-center gap-1 px-2 py-1.5 text-[10px] select-none transition-all active:scale-95",
+                    hand === "on" && "ring-2 ring-brand-violet bg-card/90",
+                    hand === "loading" && "cursor-wait opacity-70"
+                  )}
+                >
+                  <div className="flex items-center gap-1.5 font-semibold uppercase tracking-wider">
+                    <Hand className={cn("h-3 w-3", hand === "on" ? "text-brand-cyan" : "text-muted-foreground")} />
                     <span className={cn("h-2 w-2 rounded-full", {
-                      "bg-success animate-pulse": handStatus === "tracking",
-                      "bg-brand-cyan": handStatus === "pinching",
-                      "bg-brand-pink": handStatus === "grabbing",
-                      "bg-amber-400": handStatus === "frozen",
-                      "bg-yellow-400 animate-spin": handStatus === "reacquiring",
-                      "bg-muted-foreground": handStatus === "lost",
+                      "bg-success animate-pulse": hand === "on" && handStatus === "tracking",
+                      "bg-brand-cyan": hand === "on" && handStatus === "pinching",
+                      "bg-brand-pink": hand === "on" && handStatus === "grabbing",
+                      "bg-amber-400": hand === "on" && handStatus === "frozen",
+                      "bg-yellow-400 animate-spin": hand === "on" && handStatus === "reacquiring",
+                      "bg-muted-foreground": hand === "off" || handStatus === "lost",
                     })} />
-                    <span>{handStatus}</span>
+                    <span>{hand === "off" ? "HANDS" : handStatus}</span>
                   </div>
-                  <span className="text-[9px] text-muted-foreground">
-                    {hand === "off" ? "Hand: Off" : hand === "loading" ? "Loading" : handSeen ? "Active" : "No hand"}
-                  </span>
+                  <div className="flex flex-col items-center text-[9px] leading-tight">
+                    <span className={cn("font-medium", hand === "on" ? "text-brand-cyan" : "text-muted-foreground")}>
+                      {hand === "off"
+                        ? "Tap to Enable"
+                        : hand === "loading"
+                          ? "Starting…"
+                          : engine.current?.isXR()
+                            ? "WEBXR HANDS"
+                            : "MEDIAPIPE"}
+                    </span>
+                    {hand === "on" && (
+                      <span className="text-[8px] text-muted-foreground">
+                        {handSeen || engine.current?.isXR() ? "Tracking" : "Show hand"}
+                      </span>
+                    )}
+                  </div>
                 </button>
                 <button onClick={() => setDebugOpen(!debugOpen)} className="hud pointer-events-auto px-1.5 py-0.5 text-[9px] text-muted-foreground hover:text-foreground">
                   {debugOpen ? "Hide Dev Logs" : "Dev Test Logs"}

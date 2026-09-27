@@ -318,6 +318,7 @@ export function createEngine(o: EngineOpts) {
   const grabController = new GrabController3D();
   let xrHandSeen = false;
   let xrHandFrozen = false;
+  let xrHandTrackingEnabled = true;
   let xrReacquireFrames = 0;
   let xrLastLocal: THREE.Vector3 | null = null;
   const XR_HAND_LOST_GRACE_MS = 180;
@@ -383,7 +384,7 @@ export function createEngine(o: EngineOpts) {
   }
 
   function updateXRHand(frame: XRFrame) {
-    if (!xrSession || !xrReferenceSpace) return;
+    if (!xrSession || !xrReferenceSpace || !xrHandTrackingEnabled) return;
     const now = performance.now();
     const sample = xrHandFrame(frame);
 
@@ -664,6 +665,14 @@ export function createEngine(o: EngineOpts) {
     },
     view: () => orbit,
     isXR: () => !!xrSession,
+    setHandTrackingEnabled(enabled: boolean) {
+      xrHandTrackingEnabled = enabled;
+      if (!enabled) {
+        xrHandVisuals.forEach(h => { h.visible = false; });
+        if (pinchMarker) pinchMarker.visible = false;
+        o.onHandStatus?.("lost");
+      }
+    },
     dispose() {
       renderer.setAnimationLoop(null);
       xrSession?.end().catch(() => {});
