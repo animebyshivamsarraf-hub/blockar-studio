@@ -289,7 +289,7 @@ export function createEngine(o: EngineOpts) {
       // center-screen ray: face adjacency first
       const h = hitFrom(new THREE.Vector2(0, 0));
       const mode = o.getMode();
-      if (mode === "build" && h.add) place(h.add); else if (mode !== "build") applyTool(h);
+      if (mode === "track" && h.add) coaster.addPoint(...h.add); else if (mode === "build" && h.add) place(h.add); else if (mode !== "build") applyTool(h);
     });
     session.addEventListener("end", () => { hitSource = null; xrSession = null; root.position.set(0, 0, 0); grid.visible = true; placeCam(); });
   }
@@ -315,11 +315,11 @@ export function createEngine(o: EngineOpts) {
       } else reticle.visible = false;
     } else {
       const h = hitFrom(new THREE.Vector2(0, 0));
-      if (mode === "build" && h.add) {
+      if ((mode === "build" || mode === "track") && h.add) {
         reticle.visible = true;
         reticle.position.set(h.add[0] * VOXEL, h.add[1] * VOXEL + 0.002, h.add[2] * VOXEL);
       } else reticle.visible = false;
-      if (h.block && mode !== "build") {
+      if (h.block && mode !== "build" && mode !== "track") {
         selBox.visible = true; selBox.position.copy(meshes.get(h.block)!.position);
       } else selBox.visible = false;
     }
