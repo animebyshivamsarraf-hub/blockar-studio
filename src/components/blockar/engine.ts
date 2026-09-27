@@ -269,36 +269,233 @@ export function createEngine(o: EngineOpts) {
   let hitSource: XRHitTestSource | null = null;
   let anchored = false;
   let xrSession: XRSession | null = null;
+  let xrReferenceSpace: XRReferenceSpace | null = null;
+
+  // Genuine WebXR articulated-hand state. This is only active inside an XR session
+  // that actually exposes hand-tracking; MediaPipe remains a separate fallback.
+  const xrHand = {
+    seen: false,
+    pinching: false,
+    frozen: false,
+    reacquireFrames: 0,
+    lastLocal: null as THREE.Vector3 | null,
+    grabOffset: null as THREE.Vector3 | null,
+    grabKeys: [] as string[],
+  };
+  const XR_HAND_LOST_GRACE_MS = 140;
+  let handSeenAt = 0;
+  const TRACK_SAMPLE = 0.05;
+
+  function snapLocal(p: THREE.Vector3): THREE.Vector3 {
+    return new THREE.Vector3(
+      Math.round(p.x / VOXEL),
+      Math.round(p.y / VOXEL),
+      Math.round(p.z / VOXEL),
+    );
+  }
+
+  function extrudeCells(from: THREE.Vector3, to: THREE.Vector3) {
+    const distance = from.distanceTo(to);
+    const steps = Math.max(1, Math.ceil(distance / TRACK_SAMPLE));
+    for (let i = 1; i <= steps; i++) {
+      const p = from.clone().lerp(to, i / steps);
+      const q = snapLocal(p);
+      if (q.y < 0) continue;
+      place([q.x, q.y, q.z]);
+    }
+  }
+
+  function nearestBlock(local: THREE.Vector3, radius = VOXEL * 1.5): string | null {
+    let best: string | null = null;
+    let bestD = radius;
+    for (const [key, c] of cells) {
+      const p = new THREE.Vector3(c.x * VOXEL, c.y * VOXEL + VOXEL / 2, c.z * VOXEL);
+      const d = p.distanceTo(local);
+      if (d < bestD) { bestD = d; best = key; }
+    }
+    return best;
+  }
+
+  function xrHandFrame(frame: XRFrame): { local: THREE.Vector3; pinch: boolean } | null {
+    if (!xrReferenceSpace || !xrSession) return null;
+    for (const input of xrSession.inputSources) {
+      const hand = (input as XRInputSource & { hand?: XRHand }).hand;
+      if (!hand) continue;
+      const thumb = hand.get("thumb-tip");
+      const index = hand.get("index-finger-tip");
+      if (!thumb || !index) continue;
+      const thumbPose = (frame as XRFrame & { getJointPose?: (joint: XRJointSpace, base: XRSpace) => XRJointPose | undefined }).getJointPose?.(thumb, xrReferenceSpace);
+      const indexPose = (frame as XRFrame & { getJointPose?: (joint: XRJointSpace, base: XRSpace) => XRJointPose | undefined }).getJointPose?.(index, xrReferenceSpace);
+      if (!thumbPose?.transform?.position || !indexPose?.transform?.position) continue;
+      const tp = thumbPose.transform.position;
+      const ip = indexPose.transform.position;
+      const pinchPoint = new THREE.Vector3((tp.x + ip.x) / 2, (tp.y + ip.y) / 2, (tp.z + ip.z) / 2);
+      const distance = Math.hypot(tp.x - ip.x, tp.y - ip.y, tp.z - ip.z);
+      const pinch = xrHand.pinching ? distance < 0.055 : distance < 0.035;
+      return { local: root.worldToLocal(pinchPoint), pinch };
+    }
+    return null;
+  }
+
+  function updateXRHand(frame: XRFrame) {
+    if (!xrSession || !xrReferenceSpace) return;
+    const now = performance.now();
+    const sample = xrHandFrame(frame);
+    if (!sample) {
+      xrHand.seen = false;
+      if (xrHand.pinching && now - (handSeenAt || 0) > XR_HAND_LOST_GRACE_MS) {
+        xrHand.frozen = true;
+        o.onHint("HAND LOST — CONSTRUCTION FROZEN");
+      }
+      return;
+    }
+
+    const wasFrozen = xrHand.frozen;
+    xrHand.seen = true;
+    handSeenAt = now;
+    if (wasFrozen) {
+      xrHand.reacquireFrames++;
+      xrHand.lastLocal = sample.local.clone();
+      if (xrHand.reacquireFrames < 3) return;
+      xrHand.frozen = false;
+      xrHand.reacquireFrames = 0;
+      o.onHint("Hand recovered — rebased");
+      return;
+    }
+
+    const wasPinching = xrHand.pinching;
+    xrHand.pinching = sample.pinch;
+
+    if (sample.pinch && !wasPinching) {
+      xrHand.grabOffset = null;
+      xrHand.lastLocal = sample.local.clone();
+      if (o.getMode() === "track") {
+        const q = snapLocal(sample.local);
+        if (q.y >= 0) coaster.addPoint(q.x, q.y, q.z);
+        o.onHint("Pinch started — move your hand to extend the track");
+      } else if (o.getMode() === "build") {
+        stroke = [];
+        const q = snapLocal(sample.local);
+        if (q.y >= 0) place([q.x, q.y, q.z]);
+        o.onHint("Pinch started — move your hand to build");
+      } else if (o.getMode() === "move" || o.getMode() === "group") {
+        const key = nearestBlock(sample.local);
+        if (key) {
+          const c = cells.get(key)!;
+          const objectLocal = new THREE.Vector3(c.x * VOXEL, c.y * VOXEL + VOXEL / 2, c.z * VOXEL);
+          xrHand.grabOffset = objectLocal.sub(sample.local);
+          xrHand.grabKeys = o.getMode() === "group" ? connected(key) : [key];
+          o.onHint("Grabbed — move your hand in 3D");
+        }
+      } else {
+        const key = nearestBlock(sample.local);
+        if (key) {
+          const h: Hit = { add: null, block: key, floorPt: sample.local.clone() };
+          applyTool(h);
+        }
+      }
+    } else if (sample.pinch && wasPinching && !xrHand.frozen) {
+      const previous = xrHand.lastLocal;
+      xrHand.lastLocal = sample.local.clone();
+      if (!previous) return;
+      if (o.getMode() === "track") {
+        const a = snapLocal(previous), b = snapLocal(sample.local);
+        if (a.distanceTo(b) > 0) {
+          const dist = previous.distanceTo(sample.local);
+          const steps = Math.max(1, Math.ceil(dist / TRACK_SAMPLE));
+          for (let i = 1; i <= steps; i++) {
+            const p = previous.clone().lerp(sample.local, i / steps);
+            const q = snapLocal(p);
+            if (q.y >= 0) {
+              const last = coaster.count() ? null : null;
+              // addPoint itself is grid-space and rebuilds the metric track.
+              const serialized = coaster.serialize();
+              const lastPt = serialized.pts?.[serialized.pts.length - 1];
+              if (!lastPt || Math.hypot(lastPt.x - q.x * VOXEL, lastPt.y - (q.y * VOXEL + VOXEL * 0.35), lastPt.z - q.z * VOXEL) > VOXEL * 0.45) {
+                coaster.addPoint(q.x, q.y, q.z);
+              }
+            }
+          }
+        }
+      } else if (o.getMode() === "build") {
+        extrudeCells(previous, sample.local);
+      } else if ((o.getMode() === "move" || o.getMode() === "group") && xrHand.grabKeys.length && xrHand.grabOffset) {
+        const target = sample.local.clone().add(xrHand.grabOffset);
+        const base = cells.get(xrHand.grabKeys[0]!);
+        if (base) {
+          const q = snapLocal(target);
+          const dx = q.x - base.x, dy = q.y - base.y, dz = q.z - base.z;
+          const set = new Set(xrHand.grabKeys);
+          const moved = xrHand.grabKeys.map(key => {
+            const c = cells.get(key)!;
+            return { ...c, x:c.x+dx, y:Math.max(0,c.y+dy), z:c.z+dz };
+          });
+          const blocked = moved.some(c => { const nk=k(c.x,c.y,c.z); return cells.has(nk) && !set.has(nk); });
+          if (!blocked) {
+            for (const key of xrHand.grabKeys) {
+              const c=cells.get(key)!; const m=meshes.get(key)!;
+              m.position.set((c.x+dx)*VOXEL,(c.y+dy)*VOXEL+VOXEL/2,(c.z+dz)*VOXEL);
+            }
+          }
+        }
+      }
+    } else if (!sample.pinch && wasPinching) {
+      if (o.getMode() === "build" && stroke) { commit(stroke); stroke = null; }
+      xrHand.pinching = false;
+      xrHand.grabOffset = null;
+      xrHand.grabKeys = [];
+      xrHand.lastLocal = null;
+      xrHand.frozen = false;
+      xrHand.reacquireFrames = 0;
+      o.onHint("Released — structure stays in place");
+    }
+  }
   async function startXR(overlay: HTMLElement) {
     const xr = (navigator as Navigator & { xr?: XRSystem }).xr;
     if (!xr) throw new Error("WebXR not available");
-    const session = await xr.requestSession("immersive-ar", { requiredFeatures: ["hit-test"], optionalFeatures: ["dom-overlay"], domOverlay: { root: overlay } } as XRSessionInit);
+    const session = await xr.requestSession("immersive-ar", {
+      requiredFeatures: ["hit-test"],
+      optionalFeatures: ["dom-overlay", "anchors", "hand-tracking", "local-floor"],
+      domOverlay: { root: overlay },
+    } as XRSessionInit);
     xrSession = session;
     renderer.xr.setReferenceSpaceType("local");
     await renderer.xr.setSession(session);
+    xrReferenceSpace = renderer.xr.getReferenceSpace() ?? await session.requestReferenceSpace("local");
     const viewer = await session.requestReferenceSpace("viewer");
     hitSource = (await session.requestHitTestSource?.({ space: viewer })) ?? null;
     grid.visible = false; anchored = false;
     session.addEventListener("select", () => {
       if (!reticle.visible) return;
       if (!anchored) {
-        root.position.copy(reticle.getWorldPosition(new THREE.Vector3()));
+        const anchorPos = reticle.getWorldPosition(new THREE.Vector3());
+        const anchorQuat = reticle.getWorldQuaternion(new THREE.Quaternion());
+        root.position.copy(anchorPos);
+        root.quaternion.copy(anchorQuat);
         reticle.position.set(0, 0, 0);
+        reticle.quaternion.identity();
         anchored = true; grid.visible = true;
+        o.onHint("START ANCHOR LOCKED — move your hand to build");
       }
       // center-screen ray: face adjacency first
       const h = hitFrom(new THREE.Vector2(0, 0));
       const mode = o.getMode();
       if (mode === "track" && h.add) coaster.addPoint(...h.add); else if (mode === "build" && h.add) place(h.add); else if (mode !== "build") applyTool(h);
     });
-    session.addEventListener("end", () => { hitSource = null; xrSession = null; root.position.set(0, 0, 0); grid.visible = true; placeCam(); });
+    session.addEventListener("end", () => {
+      hitSource = null; xrSession = null; xrReferenceSpace = null;
+      anchored = false;
+      xrHand.seen = false; xrHand.pinching = false; xrHand.frozen = false; xrHand.lastLocal = null;
+      root.position.set(0, 0, 0); root.quaternion.identity(); grid.visible = true; placeCam();
+    });
   }
 
   // ---- loop ----
   const tmpM = new THREE.Matrix4();
   renderer.setAnimationLoop((_t, frame?: XRFrame) => {
     const mode = o.getMode();
-    const now = performance.now(); const dt = Math.min((now - lastT) / 1000, 0.05); lastT = now;
+    const now = performance.now();
+    if (frame && xrSession) updateXRHand(frame); const dt = Math.min((now - lastT) / 1000, 0.05); lastT = now;
     coaster.step(dt);
     if (coaster.isRiding() && pov && !renderer.xr.isPresenting) {
       coaster.povPose(povPose);
@@ -311,7 +508,12 @@ export function createEngine(o: EngineOpts) {
       const ref = renderer.xr.getReferenceSpace();
       if (res.length && ref) {
         const pose = res[0].getPose(ref);
-        if (pose) { tmpM.fromArray(pose.transform.matrix); reticle.position.setFromMatrixPosition(tmpM); reticle.visible = true; }
+        if (pose) {
+          tmpM.fromArray(pose.transform.matrix);
+          reticle.position.setFromMatrixPosition(tmpM);
+          reticle.quaternion.setFromRotationMatrix(tmpM);
+          reticle.visible = true;
+        }
       } else reticle.visible = false;
     } else {
       const h = hitFrom(new THREE.Vector2(0, 0));
