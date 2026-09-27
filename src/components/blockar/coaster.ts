@@ -149,7 +149,7 @@ export function createCoaster(root: THREE.Group, voxel: number) {
       const w = (d: number) => { const t = d / length; return curve!.getPointAt(loop ? ((t % 1) + 1) % 1 : Math.min(Math.max(t, 0), 1)); };
       const p = w(s), f = w(s + voxel * 4);
       out.pos.copy(p).add(new THREE.Vector3(0, voxel * 0.9, 0));
-      out.look.copy(f).add(new THREE.Vector3(0, voxel * 0.4, 0));
+      out.look.copy(f); out.look.y = out.pos.y + THREE.MathUtils.clamp(f.y - p.y, -voxel * 2, voxel * 1.2) - voxel * 0.5;
       root.localToWorld(out.pos); root.localToWorld(out.look);
     },
     serialize: () => ({ loop, pts: pts.map((p) => ({ x: p.x, y: p.y, z: p.z })) }),
