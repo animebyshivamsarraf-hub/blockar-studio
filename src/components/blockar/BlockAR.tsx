@@ -188,7 +188,7 @@ export function BlockAR() {
     if (!c.start()) return setToast("Lay at least 2 track points first");
     engine.current?.setPOV(pov); setRiding(true); setGuide(false);
   }
-  function togglePov() { const n = !pov; setPov(n); if (riding) engine.current?.setPOV(n); }
+  function togglePov() { const n = !pov; setPov(n); if (riding) { engine.current?.setPOV(n); if (!n) co()?.start() && null; } }
 
   const save = () => { localStorage.setItem(SAVE_KEY, JSON.stringify({ blocks: engine.current?.serialize() ?? [], track: co()?.serialize() })); setToast("World saved"); };
   const load = () => {
@@ -303,7 +303,7 @@ export function BlockAR() {
           </div>
 
           <div className="flex-1" />
-          {aiOpen ? (
+          {riding ? null : aiOpen ? (
             <form onSubmit={(e) => { e.preventDefault(); runAI(); }} className="hud pointer-events-auto mb-2 flex items-center gap-2 p-2">
               <Sparkles className="ml-1 h-5 w-5 shrink-0 text-brand-pink" />
               <input autoFocus value={aiText} onChange={(e) => setAiText(e.target.value)} maxLength={300} placeholder="Type anything… a house, a tree, a car" className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-muted-foreground" />

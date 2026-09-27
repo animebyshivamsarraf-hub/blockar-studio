@@ -141,12 +141,13 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     setSpeed(f: number) { speedFactor = f; },
     speedKmh: () => Math.round(v * 3.6 * 10), // toy scale ×10 for fun
     start() { if (!curve) return false; riding = true; s = 0; v = liftSpeed; train.visible = true; markers.visible = false; step(0); return true; },
-    stop() { riding = false; train.visible = false; markers.visible = true; },
+    stop() { riding = false; cars[0].visible = true; train.visible = false; markers.visible = true; },
     isRiding: () => riding,
     step,
     /** first-person camera pose in world space */
     povPose(out: { pos: THREE.Vector3; look: THREE.Vector3 }) {
       const w = (d: number) => { const t = d / length; return curve!.getPointAt(loop ? ((t % 1) + 1) % 1 : Math.min(Math.max(t, 0), 1)); };
+      cars[0].visible = false;
       const p = w(s), f = w(s + voxel * 4);
       out.pos.copy(p).add(new THREE.Vector3(0, voxel * 0.9, 0));
       out.look.copy(f); out.look.y = out.pos.y + THREE.MathUtils.clamp(f.y - p.y, -voxel * 2, voxel * 1.2) - voxel * 0.5;

@@ -348,7 +348,7 @@ export function createEngine(o: EngineOpts) {
     },
     startXR,
     coaster,
-    setPOV(on: boolean) { pov = on; if (!on) placeCam(); },
+    setPOV(on: boolean) { pov = on; if (!on) { coaster.stop && null; placeCam(); } },
     _cam: camera,
     undo() { const a = undo.pop(); if (a) { apply(a, "prev"); redo.push(a); emit(); } },
     redo() { const a = redo.pop(); if (a) { apply(a, "next"); undo.push(a); emit(); } },
