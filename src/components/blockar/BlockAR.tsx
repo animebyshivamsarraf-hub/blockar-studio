@@ -188,7 +188,7 @@ export function BlockAR() {
     if (!c.start()) return setToast("Lay at least 2 track points first");
     engine.current?.setPOV(pov); setRiding(true); setGuide(false);
   }
-  function togglePov() { const n = !pov; setPov(n); if (riding) { engine.current?.setPOV(n); if (!n) co()?.start() && null; } }
+  function togglePov() { const n = !pov; setPov(n); if (riding) { engine.current?.setPOV(n); } }
 
   const save = () => { localStorage.setItem(SAVE_KEY, JSON.stringify({ blocks: engine.current?.serialize() ?? [], track: co()?.serialize() })); setToast("World saved"); };
   const load = () => {

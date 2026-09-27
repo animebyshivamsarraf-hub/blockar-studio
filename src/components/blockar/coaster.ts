@@ -143,6 +143,7 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     start() { if (!curve) return false; riding = true; s = 0; v = liftSpeed; train.visible = true; markers.visible = false; step(0); return true; },
     stop() { riding = false; cars[0].visible = true; train.visible = false; markers.visible = true; },
     isRiding: () => riding,
+    showFront() { cars[0].visible = true; },
     step,
     /** first-person camera pose in world space */
     povPose(out: { pos: THREE.Vector3; look: THREE.Vector3 }) {
