@@ -170,7 +170,8 @@ export function createEngine(o: EngineOpts) {
   const ray = new THREE.Raycaster();
   type Hit = { add: [number, number, number] | null; block: string | null; floorPt: THREE.Vector3 | null };
   function hitFrom(ndc: THREE.Vector2): Hit {
-    ray.setFromCamera(ndc, camera);
+    const hitCamera = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+    ray.setFromCamera(ndc, hitCamera as THREE.Camera);
     const hits = ray.intersectObjects([...meshes.values(), floor], false);
     for (const h of hits) {
       const local = root.worldToLocal(h.point.clone());
