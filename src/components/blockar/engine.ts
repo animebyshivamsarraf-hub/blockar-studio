@@ -16,6 +16,23 @@ interface Change { key: string; prev: Cell | null; next: Cell | null }
 export const COLORS = ["#2f8cff", "#3ee8ff", "#c04dff", "#ff4fb8", "#ff8a2b", "#b8c2cc"];
 const k = (x: number, y: number, z: number) => `${x},${y},${z}`;
 
+/**
+ * The ONLY input consumed by construction interaction. Positions are in the
+ * construction root's local frame (anchored world space, metres).
+ *  - "tracked-3d": metric joint poses from the XR runtime (true XYZ).
+ *  - "planar-2d-limited": camera-image pinch projected onto the build plane.
+ *    NOT true 3D — height is locked; only used outside room tracking.
+ */
+export type TrackingState = "tracked-3d" | "planar-2d-limited" | "lost";
+export interface SpatialInput {
+  worldPosition: THREE.Vector3; // construction-root local
+  orientation: THREE.Quaternion | null;
+  pinching: boolean;
+  pressed: boolean;
+  confidence: number;
+  trackingState: TrackingState;
+}
+
 export interface EngineOpts {
   canvas: HTMLCanvasElement;
   getMode: () => Mode;
@@ -316,6 +333,16 @@ export function createEngine(o: EngineOpts) {
 
   let xrSession: XRSession | null = null;
   let xrReferenceSpace: XRReferenceSpace | null = null;
+  let lastHit: XRHitTestResult | null = null;
+  let anchor: XRAnchor | null = null;
+  let anchorTracked = false;
+  let enabledFeatures: string[] = [];
+  const diag = {
+    handBackend: "none" as string,
+    trackingState: "lost" as TrackingState,
+    handWorld: null as THREE.Vector3 | null,
+    confidence: 0,
+  };
 
   // Genuine WebXR articulated-hand state. This is only active inside an XR session
   // that actually exposes hand-tracking; MediaPipe remains a separate fallback.
@@ -377,6 +404,7 @@ export function createEngine(o: EngineOpts) {
       const indexWorld = new THREE.Vector3(ip.x, ip.y, ip.z);
       const pinchResult = gestureDetector.evaluatePinch(thumbWorld, indexWorld, performance.now());
       const local = root.worldToLocal(pinchResult.pinchPoint.clone());
+      diag.handWorld = pinchResult.pinchPoint.clone();
       return {
         local,
         pinch: pinchResult.isPinching,
@@ -393,8 +421,13 @@ export function createEngine(o: EngineOpts) {
   // never in screen space and never relative to the camera.
   let handWasPinching = false;
 
-  function processHandSample(local: THREE.Vector3 | null, pinching: boolean) {
+  let activeState: TrackingState = "lost";
+  function processHandSample(input: SpatialInput | null) {
     const now = performance.now();
+    const local = input ? input.worldPosition : null;
+    const pinching = input ? input.pinching : false;
+    activeState = input ? input.trackingState : "lost";
+    diag.trackingState = activeState; diag.confidence = input?.confidence ?? 0;
 
     if (!local) {
       xrHandSeen = false;
@@ -452,9 +485,9 @@ export function createEngine(o: EngineOpts) {
       deviceTelemetry.log("pinch_detected", { point: local.toArray() });
       xrLastLocal = local.clone();
       if (o.getMode() === "track") {
-        const q = snapLocal(local);
-        if (q.y >= 0) coaster.addPoint(q.x, q.y, q.z);
-        o.onHint("Pinch started — move your hand to extend the track");
+        // True world-space sample, NOT snapped to the voxel grid.
+        if (coaster.beginStroke(local, now)) o.onHint("Drawing track — move your hand, release to finish");
+        else o.onHint("Start the pinch near the end of the existing track");
       } else if (o.getMode() === "build") {
         stroke = [];
         const q = snapLocal(local);
@@ -483,59 +516,42 @@ export function createEngine(o: EngineOpts) {
       xrLastLocal = local.clone();
       if (!previous) return;
       if (o.getMode() === "track") {
-        const a = snapLocal(previous), b = snapLocal(local);
-        if (a.distanceTo(b) > 0) {
-          const dist = previous.distanceTo(local);
-          const steps = Math.max(1, Math.ceil(dist / TRACK_SAMPLE));
-          for (let i = 1; i <= steps; i++) {
-            const p = previous.clone().lerp(local, i / steps);
-            const q = snapLocal(p);
-            if (q.y >= 0) {
-              const serialized = coaster.serialize();
-              const lastPt = serialized.pts?.[serialized.pts.length - 1];
-              if (!lastPt || Math.hypot(lastPt.x - q.x * VOXEL, lastPt.y - (q.y * VOXEL + VOXEL * 0.35), lastPt.z - q.z * VOXEL) > VOXEL * 0.45) {
-                coaster.addPoint(q.x, q.y, q.z);
-              }
-            }
-          }
-        }
+        coaster.extendStroke(local, now);
       } else if (o.getMode() === "build") {
         extrudeCells(previous, local);
       } else if ((o.getMode() === "move" || o.getMode() === "group") && grabController.active) {
-        const target = grabController.updatePosition(local);
+        const target = grabController.updatePosition(local)?.clone();
         if (target) {
           const grabKeys = grabController.keys;
           const base = cells.get(grabKeys[0]!);
           if (base) {
-            const q = snapLocal(target);
-            const dx = q.x - base.x, dy = q.y - base.y, dz = q.z - base.z;
-            const set = new Set(grabKeys);
-            const moved = grabKeys.map(key => {
-              const c = cells.get(key)!;
-              return { ...c, x: c.x + dx, y: Math.max(0, c.y + dy), z: c.z + dz };
-            });
-            const blocked = moved.some(c => { const nk = k(c.x, c.y, c.z); return cells.has(nk) && !set.has(nk); });
-            if (!blocked) {
-              for (const key of grabKeys) {
-                const c = cells.get(key)!; const m = meshes.get(key)!;
-                m.position.set((c.x + dx) * VOXEL, (c.y + dy) * VOXEL + VOXEL / 2, (c.z + dz) * VOXEL);
-              }
+            // Continuous XYZ follow: objectPos = pinchPos + grabOffset.
+            // Snapping to the voxel grid only happens on release.
+            const baseLocal = new THREE.Vector3(base.x * VOXEL, base.y * VOXEL + VOXEL / 2, base.z * VOXEL);
+            if (activeState !== "tracked-3d") target.y = baseLocal.y; // limited mode: no fake height
+            target.y = Math.max(VOXEL / 2, target.y);
+            const delta = target.clone().sub(baseLocal);
+            for (const key of grabKeys) {
+              const c = cells.get(key)!; const m = meshes.get(key)!;
+              m.position.set(c.x * VOXEL + delta.x, c.y * VOXEL + VOXEL / 2 + delta.y, c.z * VOXEL + delta.z);
             }
           }
         }
       }
     } else if (!isPinching && wasPinching) {
+      if (o.getMode() === "track") coaster.endStroke();
       if (o.getMode() === "build" && stroke) {
         commit(stroke);
         stroke = null;
       } else if ((o.getMode() === "move" || o.getMode() === "group") && grabController.active && xrLastLocal) {
-        const target = grabController.updatePosition(xrLastLocal);
+        const target = grabController.updatePosition(xrLastLocal)?.clone();
         const { keys } = grabController.releaseGrab();
         deviceTelemetry.log("grab_released", { keys });
         if (keys.length && target) {
           const base = cells.get(keys[0]!);
           if (base) {
-            const q = snapLocal(target);
+            if (activeState !== "tracked-3d") target.y = base.y * VOXEL + VOXEL / 2;
+            const q = snapLocal(target.clone().sub(new THREE.Vector3(0, VOXEL / 2, 0)));
             const dx = q.x - base.x, dy = q.y - base.y, dz = q.z - base.z;
             const set = new Set(keys);
             const moved = keys.map(key => {
@@ -549,6 +565,9 @@ export function createEngine(o: EngineOpts) {
               apply(removes, "next");
               apply(adds, "next");
               commit([...removes, ...adds]);
+            } else {
+              for (const key of keys) setCell(key, cells.get(key)!); // snap preview back
+              if (blocked) o.onHint("Can't drop there — space is occupied");
             }
           }
         }
@@ -566,7 +585,8 @@ export function createEngine(o: EngineOpts) {
   function updateXRHand(frame: XRFrame) {
     if (!xrSession || !xrReferenceSpace || !xrHandTrackingEnabled) return;
     const sample = xrHandFrame(frame);
-    processHandSample(sample ? sample.local : null, sample ? sample.pinch : false);
+    diag.handBackend = sample ? "webxr-hand-joints" : diag.handBackend;
+    processHandSample(sample ? { worldPosition: sample.local, orientation: null, pinching: sample.pinch, pressed: sample.pinch, confidence: 1, trackingState: "tracked-3d" } : null);
   }
 
   // Camera-based hands (MediaPipe on phones): the pinch arrives as a point on
@@ -584,7 +604,10 @@ export function createEngine(o: EngineOpts) {
     return camera;
   }
 
-  function worldFromScreen(nx: number, ny: number): THREE.Vector3 | null {
+  // LIMITED MODE ONLY (no room tracking active): project a 2D image pinch onto
+  // the build plane. This is explicitly NOT a 3D hand position and is never
+  // used while an XR session is tracking the room.
+  function planarFromScreen(nx: number, ny: number): THREE.Vector3 | null {
     const cam = activeCamera();
     handRay.setFromCamera(new THREE.Vector2(nx, ny), cam as THREE.PerspectiveCamera);
     const hits = handRay.intersectObjects([...meshes.values(), floor], false);
@@ -602,10 +625,11 @@ export function createEngine(o: EngineOpts) {
     if (!xr) throw new Error("WebXR not available");
     const session = await xr.requestSession("immersive-ar", {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay", "anchors", "hand-tracking", "local-floor"],
+      optionalFeatures: ["dom-overlay", "anchors", "hand-tracking", "local-floor", "camera-access"],
       domOverlay: { root: overlay },
     } as XRSessionInit);
     xrSession = session;
+    enabledFeatures = Array.from((session as any).enabledFeatures ?? []);
     ensureXRHandVisuals();
     renderer.xr.setReferenceSpaceType("local");
     await renderer.xr.setSession(session);
@@ -616,6 +640,8 @@ export function createEngine(o: EngineOpts) {
     session.addEventListener("select", () => {
       if (!reticle.visible) return;
       if (!anchored) {
+        // Construction root = real surface pose from the hit test (position +
+        // orientation incl. surface normal), expressed in the XR reference space.
         const anchorPos = reticle.getWorldPosition(new THREE.Vector3());
         const anchorQuat = reticle.getWorldQuaternion(new THREE.Quaternion());
         root.position.copy(anchorPos);
@@ -623,7 +649,13 @@ export function createEngine(o: EngineOpts) {
         reticle.position.set(0, 0, 0);
         reticle.quaternion.identity();
         anchored = true; grid.visible = true;
-        o.onHint("START ANCHOR LOCKED — move your hand to build");
+        const hit = lastHit as any;
+        if (hit?.createAnchor) {
+          hit.createAnchor().then((a: XRAnchor) => { anchor = a; deviceTelemetry.log("anchor_created", {}); })
+            .catch(() => { anchor = null; });
+        }
+        o.onHint("START ANCHOR LOCKED — the build stays on this spot");
+        return;
       }
       // center-screen ray: face adjacency first
       const h = hitFrom(new THREE.Vector2(0, 0));
@@ -631,7 +663,8 @@ export function createEngine(o: EngineOpts) {
       if (mode === "track" && h.add) coaster.addPoint(...h.add); else if (mode === "build" && h.add) place(h.add); else if (mode !== "build") applyTool(h);
     });
     session.addEventListener("end", () => {
-      hitSource = null; xrSession = null; xrReferenceSpace = null;
+      hitSource = null; xrSession = null; xrReferenceSpace = null; lastHit = null;
+      try { anchor?.delete(); } catch { /* gone */ } anchor = null; anchorTracked = false;
       xrHandSeen = false; xrHandFrozen = false; xrLastLocal = null; handWasPinching = false;
       if (pinchMarker) pinchMarker.visible = false;
       if (!preserveAnchorOnEnd) {
@@ -646,9 +679,17 @@ export function createEngine(o: EngineOpts) {
 
   // ---- loop ----
   const tmpM = new THREE.Matrix4();
+  const tmpS = new THREE.Vector3();
   renderer.setAnimationLoop((_t, frame?: XRFrame) => {
     const mode = o.getMode();
     const now = performance.now();
+    if (frame && anchor && xrReferenceSpace) {
+      // Anchor refinement from ARCore: the construction root follows the real
+      // anchor pose; the camera is never its parent.
+      anchorTracked = !!(frame as any).trackedAnchors?.has?.(anchor);
+      const ap = anchorTracked ? frame.getPose(anchor.anchorSpace, xrReferenceSpace) : null;
+      if (ap) { tmpM.fromArray(ap.transform.matrix); tmpM.decompose(root.position, root.quaternion, tmpS); }
+    }
     if (frame && xrSession) updateXRHand(frame); const dt = Math.min((now - lastT) / 1000, 0.05); lastT = now;
     coaster.step(dt);
     if (coaster.isRiding() && pov && !renderer.xr.isPresenting) {
@@ -661,6 +702,7 @@ export function createEngine(o: EngineOpts) {
       const res = frame.getHitTestResults(hitSource);
       const ref = renderer.xr.getReferenceSpace();
       if (res.length && ref) {
+        lastHit = res[0];
         const pose = res[0].getPose(ref);
         if (pose) {
           tmpM.fromArray(pose.transform.matrix);
@@ -723,18 +765,56 @@ export function createEngine(o: EngineOpts) {
       try { await xrSession?.end(); } catch { /* already ended */ }
     },
     isAnchored: () => anchored,
+    /** Clean test scene: clears blocks (undoable) and track in memory only. Saved data is untouched. */
+    resetTestScene() {
+      if (coaster.isRiding()) coaster.stop();
+      coaster.clear();
+      if (cells.size) commit([...cells.keys()].map((key) => { const ch = { key, prev: cells.get(key)!, next: null }; setCell(key, null); return ch; }));
+      grabController.releaseGrab?.();
+      xrLastLocal = null; handWasPinching = false; xrHandFrozen = false;
+    },
+    diagnostics() {
+      const f = (v?: THREE.Vector3 | null) => (v ? v.toArray().map((n) => n.toFixed(2)).join(", ") : "—");
+      const rq = root.getWorldQuaternion(new THREE.Quaternion());
+      const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+      const camPos = new THREE.Vector3(); cam.getWorldPosition(camPos);
+      const ts = coaster.stats();
+      return {
+        xrActive: !!xrSession,
+        referenceSpace: xrSession ? "local" : "none (orbit preview)",
+        features: enabledFeatures.join(",") || "—",
+        hitTest: !!hitSource,
+        anchor: anchor ? (anchorTracked ? "XRAnchor tracked" : "XRAnchor (not tracked this frame)") : anchored ? "pose in reference space (no anchor API)" : "not placed",
+        rootPos: f(root.getWorldPosition(new THREE.Vector3())),
+        rootQuat: [rq.x, rq.y, rq.z, rq.w].map((n) => n.toFixed(2)).join(", "),
+        cameraPos: f(camPos),
+        cameraIsRootParent: root.parent === cam,
+        handBackend: diag.handBackend,
+        handWorld: f(diag.handWorld),
+        trackingState: diag.trackingState,
+        confidence: diag.confidence,
+        grab: grabController.active ? "grabbing" : xrHandFrozen ? "frozen" : "idle",
+        trackSamples: ts.samples, rejected: ts.rejected, lastReject: ts.lastReject,
+        maxStep: ts.maxStep.toFixed(3), trackPoints: ts.points, trackLength: ts.length.toFixed(2),
+      };
+    },
     // Camera-space pinch (normalised device coords) -> world-space construction.
     handSample(nx: number, ny: number, pinching: boolean) {
       if (!xrHandTrackingEnabled) return;
       // Native XR hands take priority — never mix the two sources.
       if (xrSession && Array.from(xrSession.inputSources).some((s) => !!s.hand)) return;
-      const world = worldFromScreen(nx, ny);
-      processHandSample(world ? root.worldToLocal(world) : null, pinching);
+      // Inside a room-tracking XR session without native hand joints we refuse
+      // to fabricate depth: the phone browser gives no metric hand pose.
+      if (xrSession) return;
+      const world = planarFromScreen(nx, ny);
+      diag.handBackend = "mediapipe-2d (limited)";
+      diag.handWorld = world;
+      processHandSample(world ? { worldPosition: root.worldToLocal(world), orientation: null, pinching, pressed: pinching, confidence: 0.5, trackingState: "planar-2d-limited" } : null);
     },
     handLost() {
       if (!xrHandTrackingEnabled) return;
       if (xrSession && Array.from(xrSession.inputSources).some((s) => !!s.hand)) return;
-      processHandSample(null, false);
+      processHandSample(null);
     },
 
     setHandTrackingEnabled(enabled: boolean) {

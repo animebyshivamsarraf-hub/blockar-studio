@@ -68,6 +68,8 @@ export function BlockAR() {
   const [handStatus, setHandStatus] = useState<"tracking" | "pinching" | "grabbing" | "lost" | "frozen" | "reacquiring" | "error">("lost");
   const [capability, setCapability] = useState<CapabilityReport | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
+  const [, setDiagTick] = useState(0);
+  useEffect(() => { if (!debugOpen) return; const id = setInterval(() => setDiagTick((n) => n + 1), 250); return () => clearInterval(id); }, [debugOpen]);
   const lastStatusUpdate = useRef<number>(0);
   const pendingStatus = useRef<string | null>(null);
 
@@ -214,6 +216,16 @@ export function BlockAR() {
     // We keep the AR session (and therefore the real-world anchor) alive if the
     // camera can be shared; only if the OS refuses do we leave AR, and even
     // then the anchored construction root keeps its real-world pose.
+    // Phone AR session without native hand joints: this browser cannot share
+    // the AR camera with hand inference and gives no metric hand pose. We do
+    // NOT end the session (that would destroy room tracking) and we do NOT
+    // fake 3D depth. Room-locked building continues with screen taps.
+    if (e0?.isXR()) {
+      setHand("off");
+      setDebouncedHandStatus("lost");
+      setToast("Limited mode: this phone can't track hands in 3D during AR. Room tracking stays on — tap to build.");
+      return;
+    }
     setBackendType("MEDIAPIPE FALLBACK");
     try {
       let activeStream = streamRef.current;
@@ -223,11 +235,7 @@ export function BlockAR() {
         try {
           activeStream = await allowCamera();
         } catch {
-          if (e0?.isXR()) {
-            // The XR session holds the camera exclusively — release it but keep the anchor.
-            await e0.stopXR(true);
-            activeStream = await allowCamera();
-          } else throw new Error("Camera could not be activated");
+          throw new Error("Camera could not be activated");
         }
       }
       if (!activeStream) throw new Error("Camera could not be activated");
@@ -471,6 +479,18 @@ export function BlockAR() {
                 <div>Backend: {capability?.backend || "detecting..."}</div>
                 <div>WebXR: {capability?.webxrSupported ? "YES" : "NO"} | AR: {capability?.immersiveArSupported ? "YES" : "NO"} | Hands: {capability?.handTrackingSupported ? "YES" : "NO"}</div>
                 <div>Rear Camera: {capability?.rearCameraAvailable ? "YES" : "NO"}</div>
+                {(() => { const d = engine.current?.diagnostics(); if (!d) return null; return (
+                  <div className="mt-1 space-y-0.5 border-t border-border/40 pt-1">
+                    <div>XR: {d.xrActive ? "ACTIVE" : "off"} · ref: {d.referenceSpace} · hit-test: {d.hitTest ? "on" : "off"}</div>
+                    <div>Features: {d.features}</div>
+                    <div>Anchor: {d.anchor}</div>
+                    <div>Root pos: {d.rootPos} · quat: {d.rootQuat}</div>
+                    <div>Camera pos: {d.cameraPos} · camera parent of root: {d.cameraIsRootParent ? "YES (BUG)" : "no"}</div>
+                    <div>Hand: {d.handBackend} · {d.trackingState} · conf {d.confidence} · pinch pos: {d.handWorld}</div>
+                    <div>Grab: {d.grab}</div>
+                    <div>Track: {d.trackPoints} pts · {d.trackSamples} samples · {d.rejected} rejected ({d.lastReject || "—"}) · max step {d.maxStep} m · {d.trackLength} m</div>
+                    <button onClick={() => { engine.current?.resetTestScene(); syncTrack(); setRiding(false); setToast("Test scene cleared — saved world untouched"); }} className="mt-1 rounded bg-destructive/20 px-2 py-0.5 text-destructive">Reset test scene</button>
+                  </div>); })()}
                 {capability?.backend === "fallback-rear" && (
                   <div className="text-amber-400">{FALLBACK_LIMITATION}</div>
                 )}

@@ -317,19 +317,9 @@ export class HandSystemRuntime {
     }
     const n = Array.from(session.inputSources).filter((s) => s.hand).length;
     this.session = n ? `XR session active · ${n} hand input(s)` : "XR session active · no native hands — switching to MediaPipe…";
-    // No native hand joints (e.g. phone Chrome) → fall back to MediaPipe instead of waiting forever
-    if (!n && !this.xrFallbackPending && performance.now() - this.xrStartT > 2500) {
-      this.xrFallbackPending = true;
-      void (async () => {
-        try {
-          const xs = this.xrSession; this.xrSession = null;
-          await xs?.end().catch(() => {});
-          await this.startMediaPipe();
-          this.set("TRACKING");
-        } catch (e) { this.error = e instanceof Error ? e.message : String(e); await this.teardown(); this.set("ERROR"); }
-        finally { this.xrFallbackPending = false; }
-      })();
-    }
+    // No native hand joints (e.g. phone Chrome): keep the XR session alive —
+    // ending it would destroy room tracking. Report limited mode instead.
+    if (!n) this.session = "XR session active · LIMITED: no native 3D hand joints on this device";
   }
 
   private sampleMediaPipe(now: number, out: Partial<Record<Side, THREE.Vector3[]>>) {

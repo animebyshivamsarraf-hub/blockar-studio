@@ -49,34 +49,60 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     }
   }
 
+  // Hand-drawn stroke sampling (world-space, construction-root local coords).
+  // Path resolution ~0.05 m is kept separate from the 0.10 m voxel grid:
+  // stroke samples are NEVER snapped to voxels.
+  const MIN_STEP = 0.05;        // target sample spacing (m)
+  const MAX_STEP = 0.25;        // larger single-step = tracking glitch → reject
+  const MAX_SPEED = 3.0;        // m/s — faster than a hand realistically draws
+  const MAX_JOIN = 0.3;         // new stroke must start within this of the track end
+  const RAIL_MIN_Y = voxel * 0.35;
+  const stats = { samples: 0, rejected: 0, maxStep: 0, lastReject: "" };
+  let strokeState: null | { smoothed: THREE.Vector3; lastDir: THREE.Vector3 | null; lastT: number; sinceRebuild: number } = null;
+
   function rebuild() {
     clear(group); clear(markers);
-    for (const p of pts) { const m = new THREE.Mesh(markGeo, markMat); m.position.copy(p); markers.add(m); }
+    // endpoint markers only — one sphere per 5 cm sample was visual noise
+    if (pts.length) {
+      for (const p of pts.length > 1 ? [pts[0], pts[pts.length - 1]] : [pts[0]]) { const m = new THREE.Mesh(markGeo, markMat); m.position.copy(p); markers.add(m); }
+    }
     curve = null; length = 0;
     if (pts.length < 2) return;
-    curve = new THREE.CatmullRomCurve3(pts, loop && pts.length > 2, "centripetal", 0.5);
+    const closed = loop && pts.length > 2;
+    curve = new THREE.CatmullRomCurve3(pts, closed, "centripetal", 0.5);
     length = curve.getLength();
     const segs = Math.max(12, Math.round(length / TARGET_SAMPLE));
-    const frames = curve.computeFrenetFrames(segs, loop);
     const up = new THREE.Vector3(0, 1, 0);
-    const gauge = 0.12;
-    const offs = gauge * 0.5;
+    const offs = 0.12 * 0.5; // constant 0.12 m gauge
     const left: THREE.Vector3[] = [], right: THREE.Vector3[] = [];
+    let prevSide: THREE.Vector3 | null = null;
+    let lastTieD = -Infinity, lastSupD = -Infinity;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
       const p = curve.getPointAt(t);
-      const tan = curve.getTangentAt(t);
-      const side = new THREE.Vector3().crossVectors(tan, up);
-      if (side.lengthSq() < 1e-4) side.copy(frames.binormals[i]);
-      side.normalize().multiplyScalar(offs);
+      const tan = curve.getTangentAt(t).normalize();
+      // Parallel-transport style side vector: prefer world-up banking, fall back
+      // to the previous frame near vertical, and never allow a 180° flip.
+      let side = new THREE.Vector3().crossVectors(tan, up);
+      if (side.lengthSq() < 0.04 && prevSide) {
+        side = prevSide.clone().sub(tan.clone().multiplyScalar(prevSide.dot(tan)));
+      }
+      if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
+      side.normalize();
+      if (prevSide && side.dot(prevSide) < 0) side.negate();
+      prevSide = side.clone();
+      side.multiplyScalar(offs);
       left.push(p.clone().add(side)); right.push(p.clone().sub(side));
-      if (Math.floor(i * (length / Math.max(1,segs)) / TIE_SPACING) !== Math.floor((i-1) * (length / Math.max(1,segs)) / TIE_SPACING)) {
+      const d = t * length;
+      if (d - lastTieD >= TIE_SPACING) {
+        lastTieD = d;
         const tie = new THREE.Mesh(new THREE.BoxGeometry(offs * 2.4, voxel * 0.05, voxel * 0.08), tieMat);
         tie.position.copy(p);
         tie.lookAt(p.clone().add(tan));
         group.add(tie);
       }
-      if (i % 8 === 0 && p.y > voxel * 0.3) {
+      if (d - lastSupD >= 0.3 && p.y > voxel * 0.3) {
+        lastSupD = d;
         const h = p.y - voxel * 0.03;
         const s = new THREE.Mesh(new THREE.CylinderGeometry(voxel * 0.06, voxel * 0.08, h, 8), supMat);
         s.position.set(p.x, h / 2, p.z);
@@ -84,11 +110,17 @@ export function createCoaster(root: THREE.Group, voxel: number) {
       }
     }
     for (const side of [left, right]) {
-      const c = new THREE.CatmullRomCurve3(side, loop && pts.length > 2);
-      group.add(new THREE.Mesh(new THREE.TubeGeometry(c, segs, RAIL_RADIUS, 6, loop && pts.length > 2), railMat));
+      const c = new THREE.CatmullRomCurve3(side, closed, "centripetal", 0.5);
+      group.add(new THREE.Mesh(new THREE.TubeGeometry(c, segs, RAIL_RADIUS, 6, closed), railMat));
     }
-    const spine = new THREE.TubeGeometry(curve, segs, SPINE_RADIUS, 6, loop && pts.length > 2);
-    group.add(new THREE.Mesh(spine, tieMat));
+    group.add(new THREE.Mesh(new THREE.TubeGeometry(curve, segs, SPINE_RADIUS, 6, closed), tieMat));
+  }
+
+  function pushPoint(p: THREE.Vector3) {
+    const last = pts[pts.length - 1];
+    if (last && last.distanceTo(p) < 0.02) return false; // duplicate filter
+    pts.push(p);
+    return true;
   }
 
   // ride state
@@ -130,16 +162,49 @@ export function createCoaster(root: THREE.Group, voxel: number) {
 
   return {
     addPoint(x: number, y: number, z: number) {
-      pts.push(new THREE.Vector3(x * voxel, y * voxel + voxel * 0.35, z * voxel));
-      rebuild();
+      if (pushPoint(new THREE.Vector3(x * voxel, y * voxel + voxel * 0.35, z * voxel))) rebuild();
       return pts.length;
     },
     raiseLast(dy: number) {
       const p = pts[pts.length - 1]; if (!p) return;
       p.y = Math.max(voxel * 0.35, p.y + dy * voxel); rebuild();
     },
+    /** Pinch start: begin a continuous world-space stroke (local coords, metres). */
+    beginStroke(p: THREE.Vector3, now = performance.now()) {
+      const q = p.clone(); q.y = Math.max(RAIL_MIN_Y, q.y);
+      const last = pts[pts.length - 1];
+      if (last && last.distanceTo(q) > MAX_JOIN) {
+        stats.rejected++; stats.lastReject = "start too far from track end";
+        strokeState = null; return false;
+      }
+      strokeState = { smoothed: q.clone(), lastDir: null, lastT: now, sinceRebuild: 0 };
+      if (!last) { pushPoint(q); stats.samples++; rebuild(); }
+      return true;
+    },
+    /** Pinch + move: sample at ~5 cm, smoothing jitter and rejecting glitches. */
+    extendStroke(p: THREE.Vector3, now = performance.now()) {
+      const st = strokeState; if (!st) return false;
+      const raw = p.clone(); raw.y = Math.max(RAIL_MIN_Y, raw.y);
+      if (raw.distanceTo(st.smoothed) > MAX_STEP * 1.6) { stats.rejected++; stats.lastReject = "tracking jump"; return false; }
+      st.smoothed.lerp(raw, 0.35); // exponential smoothing removes hand tremor
+      const last = pts[pts.length - 1]!;
+      const d = st.smoothed.distanceTo(last);
+      if (d < MIN_STEP) return false;
+      const dt = Math.max(1, now - st.lastT) / 1000;
+      if (d > MAX_STEP || d / dt > MAX_SPEED) { stats.rejected++; stats.lastReject = "impossible velocity"; st.lastT = now; return false; }
+      const dir = st.smoothed.clone().sub(last).normalize();
+      // a sharp reversal from jitter would fold the track back on itself
+      if (st.lastDir && dir.dot(st.lastDir) < -0.3) { stats.rejected++; stats.lastReject = "backtrack"; return false; }
+      pts.push(st.smoothed.clone());
+      stats.samples++; stats.maxStep = Math.max(stats.maxStep, d);
+      st.lastDir = dir; st.lastT = now;
+      if (++st.sinceRebuild >= 2) { st.sinceRebuild = 0; rebuild(); }
+      return true;
+    },
+    endStroke() { if (strokeState) { strokeState = null; rebuild(); } },
+    stats: () => ({ ...stats, points: pts.length, length }),
     removeLast() { pts.pop(); rebuild(); },
-    clear() { pts.length = 0; this.stop(); rebuild(); },
+    clear() { pts.length = 0; strokeState = null; stats.samples = 0; stats.rejected = 0; stats.maxStep = 0; this.stop(); rebuild(); },
     setLoop(l: boolean) { loop = l; rebuild(); },
     isLoop: () => loop,
     count: () => pts.length,
