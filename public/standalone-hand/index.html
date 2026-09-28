@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>BlockAR - Standalone 3D Hand Animation & Tracking</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body, html { width: 100%; height: 100%; overflow: hidden; background: #070c14; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #fff; }
+    #canvas-container { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
+    #video-feed { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; opacity: 0; transition: opacity 0.4s ease; transform: scaleX(-1); }
+    #video-feed.active { opacity: 0.85; }
+
+    /* Top HUD */
+    .hud-top {
+      position: absolute; top: 16px; left: 16px; right: 16px; z-index: 10;
+      display: flex; justify-content: space-between; align-items: flex-start;
+      pointer-events: none;
+    }
+    .hud-card {
+      background: rgba(10, 22, 38, 0.85);
+      border: 1px solid rgba(77, 232, 255, 0.35);
+      box-shadow: 0 4px 24px rgba(0, 200, 255, 0.15);
+      backdrop-filter: blur(8px);
+      border-radius: 12px;
+      padding: 12px 18px;
+      pointer-events: auto;
+    }
+    .hud-title {
+      font-size: 14px; font-weight: 700; letter-spacing: 1px; color: #4de8ff;
+      display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+    }
+    .hud-subtitle { font-size: 11px; color: #8faec8; }
+    .status-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600;
+      background: rgba(77, 232, 255, 0.15); border: 1px solid #4de8ff; color: #4de8ff;
+      transition: all 0.2s ease;
+    }
+    .status-badge.pinched {
+      background: rgba(42, 255, 153, 0.25); border-color: #2aff99; color: #2aff99;
+      box-shadow: 0 0 12px rgba(42, 255, 153, 0.4);
+    }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+    /* Controls Bar */
+    .hud-bottom {
+      position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+      z-index: 10; display: flex; gap: 12px; align-items: center;
+      background: rgba(10, 22, 38, 0.85);
+      border: 1px solid rgba(77, 232, 255, 0.3);
+      backdrop-filter: blur(8px);
+      padding: 8px 16px; border-radius: 30px;
+    }
+    .btn {
+      background: rgba(77, 232, 255, 0.12);
+      border: 1px solid rgba(77, 232, 255, 0.4);
+      color: #e6f8ff; font-size: 13px; font-weight: 600;
+      padding: 8px 16px; border-radius: 20px; cursor: pointer;
+      display: flex; align-items: center; gap: 6px;
+      transition: all 0.2s;
+    }
+    .btn:hover { background: rgba(77, 232, 255, 0.25); border-color: #4de8ff; color: #fff; }
+    .btn.active {
+      background: #4de8ff; color: #070c14; border-color: #4de8ff;
+      box-shadow: 0 0 16px rgba(77, 232, 255, 0.5);
+    }
+
+    /* Diagnostics info overlay */
+    .diag-box {
+      font-family: monospace; font-size: 11px; line-height: 1.5; color: #7dbcd8; margin-top: 6px;
+    }
+    .diag-val { color: #fff; font-weight: bold; }
+  </style>
+  <!-- Three.js from unpkg/CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <!-- MediaPipe Tasks Vision for Camera mode -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/wasm/vision_bundle.js"></script>
+</head>
+<body>
+  <video id="video-feed" playsinline muted></video>
+  <div id="canvas-container"></div>
+
+  <div class="hud-top">
+    <div class="hud-card">
+      <div class="hud-title">
+        <span>BLOCKAR 3D HAND SYSTEM</span>
+      </div>
+      <div class="hud-subtitle">Autonomous 3D Animated Hand & Real-time Tracking</div>
+      <div class="diag-box">
+        <div>MODE: <span id="diag-mode" class="diag-val">REFERENCE ANIMATION</span></div>
+        <div>PHASE: <span id="diag-phase" class="diag-val">OPEN HAND</span></div>
+        <div>PINCH DIST: <span id="diag-dist" class="diag-val">0.12m</span></div>
+      </div>
+    </div>
+
+    <div class="hud-card" style="text-align: right;">
+      <div id="status-badge" class="status-badge">
+        <span class="status-dot"></span>
+        <span id="status-text">OPEN HAND</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="hud-bottom">
+    <button id="btn-anim" class="btn active">▶ Auto Animation</button>
+    <button id="btn-camera" class="btn">📷 Live Camera</button>
+    <button id="btn-pause" class="btn">⏸ Pause</button>
+    <button id="btn-reset" class="btn">🔄 Reset</button>
+  </div>
+
+  <script src="standalone_hand.js"></script>
+</body>
+</html>
