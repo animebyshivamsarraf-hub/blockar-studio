@@ -632,7 +632,16 @@ export function createEngine(o: EngineOpts) {
     if (!xr) throw new Error("WebXR not available");
     const session = await xr.requestSession("immersive-ar", {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay", "anchors", "hand-tracking", "local-floor", "camera-access"],
+      optionalFeatures: [
+        "dom-overlay",
+        "anchors",
+        "hand-tracking",
+        "local-floor",
+        "plane-detection",
+        "depth-sensing",
+        "mesh-detection",
+        "camera-access",
+      ],
       domOverlay: { root: overlay },
     } as XRSessionInit);
     xrSession = session;
