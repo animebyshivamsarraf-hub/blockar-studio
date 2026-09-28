@@ -105,7 +105,7 @@ export async function startHands(
       cursor: { x: sx, y: sy },
       pinching: sample?.isPinching ?? false,
       status: sample?.status ?? "tracking",
-      sample: sample ?? undefined,
+      ...(sample ? { sample } : {}),
     });
   };
 

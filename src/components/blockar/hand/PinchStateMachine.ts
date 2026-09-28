@@ -1,7 +1,7 @@
 /**
  * Per-hand pinch lifecycle with hysteresis and frame debouncing.
- * Input is a scale-invariant ratio: thumbTip<->indexTip distance / palm length
- * (wrist -> middle MCP). Works identically for WebXR (metric) and MediaPipe (optical).
+ * Input is a scale-invariant ratio: thumbTip↔indexTip distance / palm length
+ * (wrist → middle MCP). Works identically for WebXR (metric) and MediaPipe (optical).
  */
 export type PinchPhase = "OPEN" | "PINCHING" | "PINCHED" | "RELEASING" | "RELEASED";
 

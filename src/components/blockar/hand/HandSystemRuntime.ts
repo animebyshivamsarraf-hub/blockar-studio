@@ -65,6 +65,11 @@ export class HandSystemRuntime {
   private lastVideoTime = -1;
   private mpFrame: Partial<Record<Side, ScreenLandmark[]>> = {};
   private xrSession: XRSession | null = null;
+  private externalStream = false;
+  private xrStartT = 0;
+  private xrFallbackPending = false;
+  /** screen-space pinch cursor per hand (only when not grabbing the test cube) */
+  onPinchCursor: ((side: Side, x: number, y: number, held: boolean) => void) | null = null;
   private mouse = { x: 0, y: 0, down: false, pinch: 0, inside: false };
 
   private fps = 0;
@@ -100,7 +105,7 @@ export class HandSystemRuntime {
       const skeleton = new HandSkeleton3D(HAND_COLORS[side]);
       this.scene.add(skeleton.group);
       const ring = new THREE.Mesh(
-        new THREE.TorusGeometry(0.018, 0.0022, 8, 40),
+        new THREE.TorusGeometry(0.018, 0.003, 10, 48),
         new THREE.MeshBasicMaterial({ color: 0x4de8ff, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }),
       );
       ring.visible = false;
@@ -121,7 +126,7 @@ export class HandSystemRuntime {
   }
 
   // ---------- lifecycle ----------
-  async start(mode: "auto" | "webxr" | "mediapipe" | "demo") {
+  async start(mode: "auto" | "webxr" | "mediapipe" | "demo", opts: { stream?: MediaStream } = {}) {
     if (this.system === "STARTING" || this.system === "INITIALIZING") return;
     await this.stop();
     this.error = null;
@@ -129,7 +134,7 @@ export class HandSystemRuntime {
       let chosen = mode;
       if (mode === "auto") chosen = (await HandSystemRuntime.webxrSupported()) ? "webxr" : "mediapipe";
       if (chosen === "webxr") await this.startWebXR();
-      else if (chosen === "mediapipe") await this.startMediaPipe();
+      else if (chosen === "mediapipe") await this.startMediaPipe(opts.stream);
       else this.startDemo();
       this.set("TRACKING");
     } catch (e: unknown) {
@@ -142,6 +147,11 @@ export class HandSystemRuntime {
 
   static async webxrSupported(): Promise<boolean> {
     const xr = (navigator as Navigator & { xr?: XRSystem }).xr;
+    // Phones (Chrome Android, iOS) can open immersive-ar but never expose XRInputSource.hand —
+    // only headsets do. So phones always use MediaPipe on the camera feed.
+    const ua = navigator.userAgent;
+    const headset = /OculusBrowser|Quest|Pico|Wolvic|VisionOS/i.test(ua);
+    if (!headset && /Android|iPhone|iPad|Mobile/i.test(ua)) return false;
     try { return !!xr && (await xr.isSessionSupported("immersive-ar")); } catch { return false; }
   }
 
@@ -164,13 +174,16 @@ export class HandSystemRuntime {
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(xrCam.getWorldQuaternion(new THREE.Quaternion()));
     this.cube.position.copy(this.tmp).addScaledVector(fwd, 0.45);
     this.session = "XR session active";
+    this.xrStartT = performance.now();
   }
 
-  private async startMediaPipe() {
+  private async startMediaPipe(external?: MediaStream) {
     this.backend = "MEDIAPIPE"; this.set("STARTING"); this.session = "requesting rear camera";
-    if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera API not available (needs HTTPS)");
     let s: MediaStream;
-    try {
+    if (external && external.getVideoTracks().some((t) => t.readyState === "live")) {
+      s = external; this.externalStream = true;
+    } else try {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera API not available (needs HTTPS)");
       s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
     } catch (e: unknown) {
       const name = e instanceof Error ? e.name : "";
@@ -206,7 +219,8 @@ export class HandSystemRuntime {
   private async teardown() {
     const s = this.xrSession; this.xrSession = null;
     if (s) { try { await s.end(); } catch { /* already ended */ } }
-    this.stream?.getTracks().forEach((t) => t.stop());
+    if (!this.externalStream) this.stream?.getTracks().forEach((t) => t.stop());
+    this.externalStream = false;
     this.stream = null;
     this.video.srcObject = null;
     try { this.landmarker?.close(); } catch { /* ignore */ }
@@ -241,6 +255,9 @@ export class HandSystemRuntime {
     Object.values(this.hands).forEach((h) => h.skeleton.dispose());
     this.renderer.dispose();
   }
+
+  getSystem(): SystemState { return this.system; }
+  getError(): string | null { return this.error; }
 
   private set(s: SystemState) { this.system = s; this.emit(true); }
 
@@ -299,7 +316,20 @@ export class HandSystemRuntime {
       if (pts.length === 21) out[src.handedness] = pts;
     }
     const n = Array.from(session.inputSources).filter((s) => s.hand).length;
-    this.session = n ? `XR session active · ${n} hand input(s)` : "XR session active · no hand input (enable hand tracking)";
+    this.session = n ? `XR session active · ${n} hand input(s)` : "XR session active · no native hands — switching to MediaPipe…";
+    // No native hand joints (e.g. phone Chrome) → fall back to MediaPipe instead of waiting forever
+    if (!n && !this.xrFallbackPending && performance.now() - this.xrStartT > 2500) {
+      this.xrFallbackPending = true;
+      void (async () => {
+        try {
+          const xs = this.xrSession; this.xrSession = null;
+          await xs?.end().catch(() => {});
+          await this.startMediaPipe();
+          this.set("TRACKING");
+        } catch (e) { this.error = e instanceof Error ? e.message : String(e); await this.teardown(); this.set("ERROR"); }
+        finally { this.xrFallbackPending = false; }
+      })();
+    }
   }
 
   private sampleMediaPipe(now: number, out: Partial<Record<Side, THREE.Vector3[]>>) {
@@ -413,10 +443,14 @@ export class HandSystemRuntime {
       cam.getWorldPosition(this.tmp);
       h.ring.lookAt(this.tmp);
       const grabbing = this.owner === h.side;
-      (h.ring.material as THREE.MeshBasicMaterial).color.setHex(grabbing ? 0xff4fb8 : phase === "PINCHING" ? 0x9ff6ff : 0x4de8ff);
+      (h.ring.material as THREE.MeshBasicMaterial).color.setHex(grabbing ? 0x4dff88 : phase === "PINCHING" ? 0x9ff6ff : 0x4dffd2);
       h.ring.scale.setScalar(phase === "PINCHING" ? 1.4 : grabbing ? 1.15 : 1);
     }
-    h.skeleton.setColor(this.owner === h.side ? 0xff7fd0 : HAND_COLORS[h.side]);
+    h.skeleton.setColor(this.owner === h.side ? 0x7dffb0 : HAND_COLORS[h.side]);
+    if (this.onPinchCursor && this.owner !== h.side) {
+      const sp = h.pinchPoint.clone().project(cam);
+      this.onPinchCursor(h.side, (sp.x + 1) / 2 * window.innerWidth, (1 - sp.y) / 2 * window.innerHeight, h.pinch.held);
+    }
   }
 
   private isNearCube(h: HandState, cam: THREE.Camera): boolean {

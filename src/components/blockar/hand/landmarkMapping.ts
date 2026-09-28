@@ -12,7 +12,7 @@ export const XR_TO_MP_JOINTS: XRHandJoint[] = [
 
 export interface ScreenLandmark { x: number; y: number; z: number } // x,y in CSS px, z relative (MediaPipe units)
 
-const PALM_METERS = 0.09; // wrist -> middle MCP, adult average
+const PALM_METERS = 0.09; // wrist → middle MCP, adult average
 
 /**
  * Lift MediaPipe screen-space landmarks into 3D camera-space using palm size as a

@@ -23,7 +23,7 @@ export interface DeviceTelemetryLog {
     | "hand_lost"
     | "hand_reacquired"
     | "fallback_selected";
-  meta?: Record<string, any>;
+  meta?: Record<string, any> | undefined;
 }
 
 class TelemetryCollector {

@@ -8,3 +8,5 @@
 > Commits you push to the connected branch sync back to Lovable and show up in
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
+
+- Hand control V1 lives in src/components/blockar/hand/HandSystemRuntime.ts (one render loop drives WebXR/MediaPipe/demo sampling -> 21-joint skeleton -> PinchStateMachine -> GrabController3D); tested at /hand-lab. Why: single unified pipeline keeps hand logic independent of the builder engine.

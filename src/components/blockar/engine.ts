@@ -309,6 +309,11 @@ export function createEngine(o: EngineOpts) {
   // ---- WebXR ----
   let hitSource: XRHitTestSource | null = null;
   let anchored = false;
+  // When we end an XR session on purpose (e.g. to free the camera for
+  // MediaPipe hands) the real-world anchor pose of the construction root must
+  // survive, otherwise every placed object jumps back to the origin.
+  let preserveAnchorOnEnd = false;
+
   let xrSession: XRSession | null = null;
   let xrReferenceSpace: XRReferenceSpace | null = null;
 
@@ -383,15 +388,18 @@ export function createEngine(o: EngineOpts) {
     return null;
   }
 
-  function updateXRHand(frame: XRFrame) {
-    if (!xrSession || !xrReferenceSpace || !xrHandTrackingEnabled) return;
-    const now = performance.now();
-    const sample = xrHandFrame(frame);
+  // Shared world-space hand pipeline. `local` is ALWAYS expressed in the
+  // construction root's coordinate system (the anchored real-world space),
+  // never in screen space and never relative to the camera.
+  let handWasPinching = false;
 
-    if (!sample) {
+  function processHandSample(local: THREE.Vector3 | null, pinching: boolean) {
+    const now = performance.now();
+
+    if (!local) {
       xrHandSeen = false;
-      if (pinchMarker) pinchMarker.visible = false;
-      if (gestureDetector.getConfig() && grabController.active && now - (handSeenAt || 0) > XR_HAND_LOST_GRACE_MS) {
+
+      if (grabController.active && now - (handSeenAt || 0) > XR_HAND_LOST_GRACE_MS) {
         xrHandFrozen = true;
         grabController.freeze();
         o.onHandStatus?.("frozen");
@@ -406,28 +414,31 @@ export function createEngine(o: EngineOpts) {
     const wasFrozen = xrHandFrozen;
     xrHandSeen = true;
     if (pinchMarker) {
-      pinchMarker.position.copy(root.localToWorld(sample.local.clone()));
-      pinchMarker.visible = sample.pinch;
+      pinchMarker.position.copy(root.localToWorld(local.clone()));
+      pinchMarker.visible = pinching;
     }
     handSeenAt = now;
 
     if (wasFrozen) {
       xrReacquireFrames++;
-      xrLastLocal = sample.local.clone();
+      xrLastLocal = local.clone();
+      handWasPinching = pinching;
       if (xrReacquireFrames < 3) {
         o.onHandStatus?.("reacquiring");
         return;
       }
       xrHandFrozen = false;
       xrReacquireFrames = 0;
-      grabController.rebase(sample.local);
-      deviceTelemetry.log("hand_reacquired", { point: sample.local.toArray() });
+      grabController.rebase(local);
+      deviceTelemetry.log("hand_reacquired", { point: local.toArray() });
       o.onHint("Hand recovered — rebased");
       return;
     }
 
-    const wasPinching = grabController.active || (xrLastLocal !== null && gestureDetector.evaluatePinch(sample.thumbWorld, sample.indexWorld, now).isPinching);
-    const isPinching = sample.pinch;
+    const wasPinching = handWasPinching;
+    const isPinching = pinching;
+    handWasPinching = pinching;
+
 
     if (isPinching && !grabController.active) {
       o.onHandStatus?.("pinching");
@@ -438,46 +449,46 @@ export function createEngine(o: EngineOpts) {
     }
 
     if (isPinching && !wasPinching) {
-      deviceTelemetry.log("pinch_detected", { point: sample.local.toArray() });
-      xrLastLocal = sample.local.clone();
+      deviceTelemetry.log("pinch_detected", { point: local.toArray() });
+      xrLastLocal = local.clone();
       if (o.getMode() === "track") {
-        const q = snapLocal(sample.local);
+        const q = snapLocal(local);
         if (q.y >= 0) coaster.addPoint(q.x, q.y, q.z);
         o.onHint("Pinch started — move your hand to extend the track");
       } else if (o.getMode() === "build") {
         stroke = [];
-        const q = snapLocal(sample.local);
+        const q = snapLocal(local);
         if (q.y >= 0) place([q.x, q.y, q.z]);
         o.onHint("Pinch started — move your hand to build");
       } else if (o.getMode() === "move" || o.getMode() === "group") {
-        const key = nearestBlock(sample.local);
+        const key = nearestBlock(local);
         if (key) {
           const c = cells.get(key)!;
           const objectLocal = new THREE.Vector3(c.x * VOXEL, c.y * VOXEL + VOXEL / 2, c.z * VOXEL);
           const keys = o.getMode() === "group" ? connected(key) : [key];
-          grabController.startGrab(sample.local, objectLocal, keys);
+          grabController.startGrab(local, objectLocal, keys);
           deviceTelemetry.log("grab_started", { keys, objectLocal: objectLocal.toArray() });
           o.onHandStatus?.("grabbing");
           o.onHint("Grabbed — move your hand in 3D");
         }
       } else {
-        const key = nearestBlock(sample.local);
+        const key = nearestBlock(local);
         if (key) {
-          const h: Hit = { add: null, block: key, floorPt: sample.local.clone() };
+          const h: Hit = { add: null, block: key, floorPt: local.clone() };
           applyTool(h);
         }
       }
     } else if (isPinching && wasPinching && !xrHandFrozen) {
       const previous = xrLastLocal;
-      xrLastLocal = sample.local.clone();
+      xrLastLocal = local.clone();
       if (!previous) return;
       if (o.getMode() === "track") {
-        const a = snapLocal(previous), b = snapLocal(sample.local);
+        const a = snapLocal(previous), b = snapLocal(local);
         if (a.distanceTo(b) > 0) {
-          const dist = previous.distanceTo(sample.local);
+          const dist = previous.distanceTo(local);
           const steps = Math.max(1, Math.ceil(dist / TRACK_SAMPLE));
           for (let i = 1; i <= steps; i++) {
-            const p = previous.clone().lerp(sample.local, i / steps);
+            const p = previous.clone().lerp(local, i / steps);
             const q = snapLocal(p);
             if (q.y >= 0) {
               const serialized = coaster.serialize();
@@ -489,9 +500,9 @@ export function createEngine(o: EngineOpts) {
           }
         }
       } else if (o.getMode() === "build") {
-        extrudeCells(previous, sample.local);
+        extrudeCells(previous, local);
       } else if ((o.getMode() === "move" || o.getMode() === "group") && grabController.active) {
-        const target = grabController.updatePosition(sample.local);
+        const target = grabController.updatePosition(local);
         if (target) {
           const grabKeys = grabController.keys;
           const base = cells.get(grabKeys[0]!);
@@ -550,6 +561,42 @@ export function createEngine(o: EngineOpts) {
     }
   }
 
+  // Native WebXR articulated hands (headsets): joints already arrive in the
+  // XR reference space, so they are true world coordinates.
+  function updateXRHand(frame: XRFrame) {
+    if (!xrSession || !xrReferenceSpace || !xrHandTrackingEnabled) return;
+    const sample = xrHandFrame(frame);
+    processHandSample(sample ? sample.local : null, sample ? sample.pinch : false);
+  }
+
+  // Camera-based hands (MediaPipe on phones): the pinch arrives as a point on
+  // the camera image. We cast that through the live AR camera into the scene
+  // and use the real intersection with the anchored surface / existing blocks.
+  // The result is a WORLD point in the construction root's space — never a
+  // screen coordinate and never parented to the camera.
+  const handRay = new THREE.Raycaster();
+  function activeCamera(): THREE.Camera {
+    if (renderer.xr.isPresenting) {
+      const xrCam = renderer.xr.getCamera() as THREE.ArrayCamera;
+      if (xrCam?.cameras?.length) return xrCam.cameras[0]!;
+      return xrCam ?? camera;
+    }
+    return camera;
+  }
+
+  function worldFromScreen(nx: number, ny: number): THREE.Vector3 | null {
+    const cam = activeCamera();
+    handRay.setFromCamera(new THREE.Vector2(nx, ny), cam as THREE.PerspectiveCamera);
+    const hits = handRay.intersectObjects([...meshes.values(), floor], false);
+    if (hits.length) return hits[0]!.point.clone();
+    // No surface under the ray: fall back to the anchored construction plane.
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0).applyMatrix4(root.matrixWorld);
+    const p = new THREE.Vector3();
+    if (handRay.ray.intersectPlane(plane, p)) return p;
+    return null;
+  }
+
+
   async function startXR(overlay: HTMLElement) {
     const xr = (navigator as Navigator & { xr?: XRSystem }).xr;
     if (!xr) throw new Error("WebXR not available");
@@ -585,11 +632,16 @@ export function createEngine(o: EngineOpts) {
     });
     session.addEventListener("end", () => {
       hitSource = null; xrSession = null; xrReferenceSpace = null;
-      anchored = false;
-      xrHand.seen = false; xrHand.pinching = false; xrHand.frozen = false; xrHand.lastLocal = null;
+      xrHandSeen = false; xrHandFrozen = false; xrLastLocal = null; handWasPinching = false;
       if (pinchMarker) pinchMarker.visible = false;
-      root.position.set(0, 0, 0); root.quaternion.identity(); grid.visible = true; placeCam();
+      if (!preserveAnchorOnEnd) {
+        anchored = false;
+        root.position.set(0, 0, 0); root.quaternion.identity();
+      }
+      preserveAnchorOnEnd = false;
+      grid.visible = true; placeCam();
     });
+
   }
 
   // ---- loop ----
@@ -666,7 +718,25 @@ export function createEngine(o: EngineOpts) {
     view: () => orbit,
     isXR: () => !!xrSession,
     xrHandCount: () => (xrSession ? Array.from(xrSession.inputSources).filter((s) => !!s.hand).length : 0),
-    async stopXR() { try { await xrSession?.end(); } catch { /* already ended */ } },
+    async stopXR(preserveAnchor = true) {
+      preserveAnchorOnEnd = preserveAnchor;
+      try { await xrSession?.end(); } catch { /* already ended */ }
+    },
+    isAnchored: () => anchored,
+    // Camera-space pinch (normalised device coords) -> world-space construction.
+    handSample(nx: number, ny: number, pinching: boolean) {
+      if (!xrHandTrackingEnabled) return;
+      // Native XR hands take priority — never mix the two sources.
+      if (xrSession && Array.from(xrSession.inputSources).some((s) => !!s.hand)) return;
+      const world = worldFromScreen(nx, ny);
+      processHandSample(world ? root.worldToLocal(world) : null, pinching);
+    },
+    handLost() {
+      if (!xrHandTrackingEnabled) return;
+      if (xrSession && Array.from(xrSession.inputSources).some((s) => !!s.hand)) return;
+      processHandSample(null, false);
+    },
+
     setHandTrackingEnabled(enabled: boolean) {
       xrHandTrackingEnabled = enabled;
       if (!enabled) {

@@ -210,14 +210,25 @@ export function BlockAR() {
       return;
     }
 
-    // Phones: WebXR AR has no hand joints → leave AR (it holds the camera) and use MediaPipe.
+    // Phones: WebXR AR exposes no hand joints, so MediaPipe reads the camera.
+    // We keep the AR session (and therefore the real-world anchor) alive if the
+    // camera can be shared; only if the OS refuses do we leave AR, and even
+    // then the anchored construction root keeps its real-world pose.
     setBackendType("MEDIAPIPE FALLBACK");
     try {
-      if (e0?.isXR()) { e0.setHandTrackingEnabled(false); await e0.stopXR(); }
       let activeStream = streamRef.current;
-      if (!activeStream || !camOk || !activeStream.getVideoTracks().some((t) => t.readyState === "live")) {
+      const streamLive = !!activeStream && camOk && activeStream.getVideoTracks().some((t) => t.readyState === "live");
+      if (!streamLive) {
         setToast("Requesting camera for hand tracking…");
-        activeStream = await allowCamera();
+        try {
+          activeStream = await allowCamera();
+        } catch {
+          if (e0?.isXR()) {
+            // The XR session holds the camera exclusively — release it but keep the anchor.
+            await e0.stopXR(true);
+            activeStream = await allowCamera();
+          } else throw new Error("Camera could not be activated");
+        }
       }
       if (!activeStream) throw new Error("Camera could not be activated");
       if (!handCanvas.current) throw new Error("Hand layer not mounted");
@@ -225,30 +236,39 @@ export function BlockAR() {
       setHand("initializing");
       const hv = document.createElement("video");
       hv.muted = true; hv.playsInline = true;
-      let pinched = false; let side: string | null = null;
+      let anyHand = false;
       const rt = new HandSystemRuntime(handCanvas.current, hv, overlayRef.current ?? document.body, (d) => {
         const l = d.left.status === "tracking" || d.right.status === "tracking";
+        anyHand = l;
         setHandSeen(l);
         const grabbing = d.left.grabbing || d.right.grabbing;
         const pinching = [d.left, d.right].some((h) => h.pinch === "PINCHED" || h.pinch === "PINCHING");
         setDebouncedHandStatus(grabbing ? "grabbing" : pinching ? "pinching" : l ? "tracking" : "lost");
         setHandLabels(d.labels);
+        // Hand gone → freeze the world construction instead of teleporting it.
+        if (!l) { engine.current?.handLost(); setPinch(false); }
         if (d.system === "ERROR" && d.error) { setHand("error"); setHandError(d.error); }
       });
-      rt.onPinchCursor = (s2, x, y, held) => {
-        const e = engine.current; if (!e) return;
-        if (side && side !== s2) return;
-        if (held && !pinched) { e.synth("down", x, y); pinched = true; side = s2; setPinch(true); }
-        else if (held && pinched) e.synth("move", x, y);
-        else if (!held && pinched) { e.synth("up", x, y); pinched = false; side = null; setPinch(false); }
+      // Feed the tracked pinch into the WORLD-space construction pipeline.
+      // x/y are only used to cast a ray through the live AR camera; the object
+      // position itself is computed in the anchored world coordinate system.
+      rt.onPinchCursor = (_side, x, y, held) => {
+        const e = engine.current; if (!e || !anyHand) return;
+        const nx = (x / window.innerWidth) * 2 - 1;
+        const ny = -(y / window.innerHeight) * 2 + 1;
+        e.handSample(nx, ny, held);
+        setPinch(held);
       };
       handRuntime.current = rt;
-      stopHands.current = () => { rt.dispose(); handRuntime.current = null; setHandLabels([]); };
+      stopHands.current = () => { rt.dispose(); handRuntime.current = null; setHandLabels([]); engine.current?.handLost(); };
       await rt.start("mediapipe", { stream: activeStream });
       if (rt.getSystem() !== "TRACKING") throw new Error(rt.getError() || "Hand tracking failed to start");
       setHand("on");
       setGuide(false);
-      setToast("Hand Control on · show your hand to the camera");
+      setToast(engine.current?.isXR()
+        ? "Hand Control on · room tracking still active"
+        : "Hand Control on · show your hand to the camera");
+
     } catch (err: any) {
       stopHands.current?.(); stopHands.current = null;
       const reason = err?.message || "Hand tracking initialization failed";
