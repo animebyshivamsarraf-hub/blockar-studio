@@ -665,6 +665,8 @@ export function createEngine(o: EngineOpts) {
     },
     view: () => orbit,
     isXR: () => !!xrSession,
+    xrHandCount: () => (xrSession ? Array.from(xrSession.inputSources).filter((s) => !!s.hand).length : 0),
+    async stopXR() { try { await xrSession?.end(); } catch { /* already ended */ } },
     setHandTrackingEnabled(enabled: boolean) {
       xrHandTrackingEnabled = enabled;
       if (!enabled) {

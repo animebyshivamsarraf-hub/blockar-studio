@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Box, Camera, Check, Circle, Cylinder, Hand, Move, Paintbrush, Redo2, Save, FolderOpen, Trash2, Triangle, Undo2, Group, ScanLine, Pointer } from "lucide-react";
 import { COLORS, createEngine, type Engine, type Mode, type Shape } from "./engine";
 import { cn } from "@/lib/utils";
-import { startHands, type HandFrame } from "./hands";
+import { HandSystemRuntime } from "./hand/HandSystemRuntime";
 import { aiBuild } from "@/lib/ai-build.functions";
 import { Sparkles, Loader2, X, Spline, Play, Square, ArrowUp, ArrowDown, Repeat, Eye, Wand2 } from "lucide-react";
 
@@ -89,6 +89,8 @@ export function BlockAR() {
   };
   const handCanvas = useRef<HTMLCanvasElement>(null);
   const stopHands = useRef<(() => void) | null>(null);
+  const handRuntime = useRef<HandSystemRuntime | null>(null);
+  const [handLabels, setHandLabels] = useState<{ side: string; x: number; y: number; text: string }[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -195,60 +197,60 @@ export function BlockAR() {
 
     setHand("starting");
     setHandError(null);
+    const e0 = engine.current;
 
-    // Primary: WebXR
-    if (engine.current?.isXR()) {
+    // Primary: WebXR — only when the session really exposes native hand joints (headsets).
+    if (e0?.isXR() && e0.xrHandCount() > 0) {
       setBackendType("WEBXR HANDS");
       setHand("initializing");
-      engine.current.setHandTrackingEnabled(true);
+      e0.setHandTrackingEnabled(true);
       setHand("on");
       setGuide(false);
       setToast("Backend: WEBXR HANDS active · pinch to build");
       return;
     }
 
-    // Fallback: MediaPipe
+    // Phones: WebXR AR has no hand joints → leave AR (it holds the camera) and use MediaPipe.
     setBackendType("MEDIAPIPE FALLBACK");
     try {
+      if (e0?.isXR()) { e0.setHandTrackingEnabled(false); await e0.stopXR(); }
       let activeStream = streamRef.current;
-      if (!activeStream || !camOk) {
+      if (!activeStream || !camOk || !activeStream.getVideoTracks().some((t) => t.readyState === "live")) {
         setToast("Requesting camera for hand tracking…");
         activeStream = await allowCamera();
       }
-      if (!activeStream) {
-        throw new Error("Camera could not be activated");
-      }
+      if (!activeStream) throw new Error("Camera could not be activated");
+      if (!handCanvas.current) throw new Error("Hand layer not mounted");
 
       setHand("initializing");
-      if (videoRef.current && videoRef.current.srcObject !== activeStream) {
-        videoRef.current.srcObject = activeStream;
-        await videoRef.current.play().catch(() => {});
-      }
-
-      if (!videoRef.current) {
-        throw new Error("Camera preview element not mounted");
-      }
-
-      let pinched = false;
-      stopHands.current = await startHands(videoRef.current, (f: HandFrame | null) => {
-        setHandSeen(!!f);
-        drawHand(f);
-        const e = engine.current;
-        if (!f) {
-          setDebouncedHandStatus("lost");
-          if (pinched && e) { e.synth("up", 0, 0); pinched = false; setPinch(false); }
-          return;
-        }
-        setDebouncedHandStatus(f.status || (f.pinching ? "pinching" : "tracking"));
-        const { x, y } = f.cursor;
-        if (f.pinching && !pinched) { e?.synth("down", x, y); pinched = true; setPinch(true); }
-        else if (f.pinching && pinched) e?.synth("move", x, y);
-        else if (!f.pinching && pinched) { e?.synth("up", x, y); pinched = false; setPinch(false); }
+      const hv = document.createElement("video");
+      hv.muted = true; hv.playsInline = true;
+      let pinched = false; let side: string | null = null;
+      const rt = new HandSystemRuntime(handCanvas.current, hv, overlayRef.current ?? document.body, (d) => {
+        const l = d.left.status === "tracking" || d.right.status === "tracking";
+        setHandSeen(l);
+        const grabbing = d.left.grabbing || d.right.grabbing;
+        const pinching = [d.left, d.right].some((h) => h.pinch === "PINCHED" || h.pinch === "PINCHING");
+        setDebouncedHandStatus(grabbing ? "grabbing" : pinching ? "pinching" : l ? "tracking" : "lost");
+        setHandLabels(d.labels);
+        if (d.system === "ERROR" && d.error) { setHand("error"); setHandError(d.error); }
       });
+      rt.onPinchCursor = (s2, x, y, held) => {
+        const e = engine.current; if (!e) return;
+        if (side && side !== s2) return;
+        if (held && !pinched) { e.synth("down", x, y); pinched = true; side = s2; setPinch(true); }
+        else if (held && pinched) e.synth("move", x, y);
+        else if (!held && pinched) { e.synth("up", x, y); pinched = false; side = null; setPinch(false); }
+      };
+      handRuntime.current = rt;
+      stopHands.current = () => { rt.dispose(); handRuntime.current = null; setHandLabels([]); };
+      await rt.start("mediapipe", { stream: activeStream });
+      if (rt.getSystem() !== "TRACKING") throw new Error(rt.getError() || "Hand tracking failed to start");
       setHand("on");
       setGuide(false);
-      setToast("Backend: MEDIAPIPE FALLBACK active · show hand to camera");
+      setToast("Hand Control on · show your hand to the camera");
     } catch (err: any) {
+      stopHands.current?.(); stopHands.current = null;
       const reason = err?.message || "Hand tracking initialization failed";
       setHand("error");
       setHandError(reason);
@@ -256,18 +258,7 @@ export function BlockAR() {
       setToast(`Error: ${reason}`);
     }
   }
-  function clearHandCanvas() { const c = handCanvas.current; c?.getContext("2d")?.clearRect(0, 0, c.width, c.height); }
-  function drawHand(f: HandFrame | null) {
-    const c = handCanvas.current; if (!c) return;
-    if (c.width !== innerWidth) { c.width = innerWidth; c.height = innerHeight; }
-    const g = c.getContext("2d")!; g.clearRect(0, 0, c.width, c.height);
-    if (!f) return;
-    const css = getComputedStyle(document.documentElement);
-    g.fillStyle = css.getPropertyValue("--brand-cyan") || "cyan";
-    for (const p of f.points) { g.beginPath(); g.arc(p.x, p.y, 4, 0, 7); g.fill(); }
-    g.lineWidth = 3; g.strokeStyle = f.pinching ? css.getPropertyValue("--success") : css.getPropertyValue("--foreground");
-    g.beginPath(); g.arc(f.cursor.x, f.cursor.y, f.pinching ? 10 : 18, 0, 7); g.stroke();
-  }
+  function clearHandCanvas() { /* 3D hand layer clears itself on stop */ }
 
   async function runAI() {
     if (!aiText.trim() || aiBusy) return;
@@ -350,6 +341,9 @@ export function BlockAR() {
       {!camOk && <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_70%,var(--glow),transparent_65%)]" />}
       {stage === "build" && <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />}
       <canvas ref={handCanvas} className="pointer-events-none absolute inset-0 h-full w-full" />
+      {handLabels.map((l) => (
+        <div key={l.side} className="pointer-events-none absolute -translate-x-1/2 rounded-full border border-success/60 bg-background/60 px-2 py-0.5 text-[10px] font-bold tracking-wider text-success" style={{ left: l.x, top: l.y - 38 }}>{l.text}</div>
+      ))}
 
       {stage === "scanning" && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 bg-background/40">
@@ -410,6 +404,7 @@ export function BlockAR() {
                     </span>
                   </div>
                 </button>
+                <a href="/hand-lab" className="hud pointer-events-auto px-1.5 py-0.5 text-center text-[9px] font-semibold text-brand-cyan">Open Hand Lab</a>
                 <button onClick={() => setDebugOpen(!debugOpen)} className="hud pointer-events-auto px-1.5 py-0.5 text-[9px] text-muted-foreground hover:text-foreground">
                   {debugOpen ? "Hide Dev Logs" : "Dev Test Logs"}
                 </button>
