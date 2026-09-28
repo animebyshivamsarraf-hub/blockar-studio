@@ -56,7 +56,6 @@ export function createCoaster(root: THREE.Group, voxel: number) {
   const MAX_STEP = 0.25;        // larger single-step = tracking glitch → reject
   const MAX_SPEED = 3.0;        // m/s — faster than a hand realistically draws
   const MAX_JOIN = 0.3;         // new stroke must start within this of the track end
-  const RAIL_MIN_Y = voxel * 0.35;
   const stats = { samples: 0, rejected: 0, maxStep: 0, lastStep: 0, lastReject: "" };
   let strokeState: null | { smoothed: THREE.Vector3; lastDir: THREE.Vector3 | null; lastT: number; sinceRebuild: number } = null;
 
@@ -162,16 +161,16 @@ export function createCoaster(root: THREE.Group, voxel: number) {
 
   return {
     addPoint(x: number, y: number, z: number) {
-      if (pushPoint(new THREE.Vector3(x * voxel, y * voxel + voxel * 0.35, z * voxel))) rebuild();
+      if (pushPoint(new THREE.Vector3(x * voxel, y * voxel, z * voxel))) rebuild();
       return pts.length;
     },
     raiseLast(dy: number) {
       const p = pts[pts.length - 1]; if (!p) return;
-      p.y = Math.max(voxel * 0.35, p.y + dy * voxel); rebuild();
+      p.y += dy * voxel; rebuild();
     },
     /** Pinch start: begin a continuous world-space stroke (local coords, metres). */
     beginStroke(p: THREE.Vector3, now = performance.now()) {
-      const q = p.clone(); q.y = Math.max(RAIL_MIN_Y, q.y);
+      const q = p.clone();
       const last = pts[pts.length - 1];
       if (last && last.distanceTo(q) > MAX_JOIN) {
         stats.rejected++; stats.lastReject = "start too far from track end";
@@ -184,7 +183,7 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     /** Pinch + move: sample at ~5 cm, smoothing jitter and rejecting glitches. */
     extendStroke(p: THREE.Vector3, now = performance.now()) {
       const st = strokeState; if (!st) return false;
-      const raw = p.clone(); raw.y = Math.max(RAIL_MIN_Y, raw.y);
+      const raw = p.clone();
       if (raw.distanceTo(st.smoothed) > MAX_STEP * 1.6) { stats.rejected++; stats.lastReject = "tracking jump"; return false; }
       st.smoothed.lerp(raw, 0.35); // exponential smoothing removes hand tremor
       const last = pts[pts.length - 1]!;
@@ -193,8 +192,6 @@ export function createCoaster(root: THREE.Group, voxel: number) {
       const dt = Math.max(1, now - st.lastT) / 1000;
       if (d > MAX_STEP || d / dt > MAX_SPEED) { stats.rejected++; stats.lastReject = "impossible velocity"; st.lastT = now; return false; }
       const dir = st.smoothed.clone().sub(last).normalize();
-      // a sharp reversal from jitter would fold the track back on itself
-      if (st.lastDir && dir.dot(st.lastDir) < -0.3) { stats.rejected++; stats.lastReject = "backtrack"; return false; }
       pts.push(st.smoothed.clone());
       stats.samples++; stats.maxStep = Math.max(stats.maxStep, d); stats.lastStep = d;
       st.lastDir = dir; st.lastT = now;
@@ -234,7 +231,7 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     /** preset: generate a fun coaster from grid-space points */
     loadGrid(list: TrackPoint[], l = true) {
       pts.length = 0; loop = l;
-      for (const p of list) pts.push(new THREE.Vector3(p.x * voxel, p.y * voxel + voxel * 0.35, p.z * voxel));
+      for (const p of list) pts.push(new THREE.Vector3(p.x * voxel, p.y * voxel, p.z * voxel));
       rebuild();
     },
   };
