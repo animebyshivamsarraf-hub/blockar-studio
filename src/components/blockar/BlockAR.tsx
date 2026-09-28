@@ -136,6 +136,16 @@ export function BlockAR() {
 
   async function allowCamera(): Promise<MediaStream | null> {
     setCamErr(null);
+
+    // WebXR AR is the primary path when the device exposes real room tracking.
+    // Do not open a second getUserMedia camera first: that can steal the camera
+    // from ARCore/WebXR and prevent real surface detection.
+    if (xrOk) {
+      setStage("build");
+      window.setTimeout(() => { void enterXR(); }, 250);
+      return null;
+    }
+
     try {
       let s: MediaStream;
       try {
