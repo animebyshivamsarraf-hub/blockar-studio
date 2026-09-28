@@ -2,7 +2,6 @@
 import * as THREE from "three";
 import { XRHandModelFactory } from "three/addons/webxr/XRHandModelFactory.js";
 import { GestureDetector } from "./hand/GestureDetector";
-import { HandController3D } from "./hand/HandController3D";
 import { GrabController3D } from "./interaction/GrabController3D";
 import { deviceTelemetry } from "./device/CapabilityDetector";
 import { createCoaster } from "./coaster";
@@ -342,7 +341,14 @@ export function createEngine(o: EngineOpts) {
     trackingState: "lost" as TrackingState,
     handWorld: null as THREE.Vector3 | null,
     confidence: 0,
+    handState: "lost" as string,
+    viewerPoseAt: 0,
   };
+  // Record the real hand state every time it is reported (diagnostics only).
+  {
+    const report = o.onHandStatus;
+    o.onHandStatus = (s: any) => { diag.handState = s; report?.(s); };
+  }
 
   // Genuine WebXR articulated-hand state. This is only active inside an XR session
   // that actually exposes hand-tracking; MediaPipe remains a separate fallback.
@@ -683,6 +689,11 @@ export function createEngine(o: EngineOpts) {
   renderer.setAnimationLoop((_t, frame?: XRFrame) => {
     const mode = o.getMode();
     const now = performance.now();
+    if (frame && xrReferenceSpace) {
+      // Honest world-tracking signal: the XR runtime returned a viewer pose this frame.
+      const vp = frame.getViewerPose(xrReferenceSpace);
+      if (vp && !(vp as any).emulatedPosition) diag.viewerPoseAt = now;
+    }
     if (frame && anchor && xrReferenceSpace) {
       // Anchor refinement from ARCore: the construction root follows the real
       // anchor pose; the camera is never its parent.
@@ -796,6 +807,16 @@ export function createEngine(o: EngineOpts) {
         grab: grabController.active ? "grabbing" : xrHandFrozen ? "frozen" : "idle",
         trackSamples: ts.samples, rejected: ts.rejected, lastReject: ts.lastReject,
         maxStep: ts.maxStep.toFixed(3), trackPoints: ts.points, trackLength: ts.length.toFixed(2),
+        // ---- Physical test mode summary (all derived from live state) ----
+        arSession: xrSession ? "ON" : "OFF",
+        worldTracking: xrSession ? (performance.now() - diag.viewerPoseAt < 500 ? "ACTIVE" : "LOST") : "N/A (no AR)",
+        anchorState: anchor && anchorTracked ? "ACTIVE" : anchored ? "FALLBACK" : "NONE",
+        handBackendLabel: diag.handBackend === "webxr-hand-joints" ? "WEBXR 3D" : diag.handBackend.startsWith("mediapipe") ? "MEDIAPIPE 2D" : "NONE",
+        spatialInput: diag.handBackend === "webxr-hand-joints" ? "METRIC_3D" : diag.handBackend.startsWith("mediapipe") ? "PLANAR_LIMITED" : "NONE",
+        rootLock: root.parent === scene && root.parent !== cam && (!xrSession || anchored) ? "WORLD-LOCKED" : xrSession && !anchored ? "NOT PLACED" : "INVALID",
+        handState: String(diag.handState).toUpperCase(),
+        sampleSpacing: ts.lastStep ? ts.lastStep.toFixed(3) + " m (target 0.050)" : "— (target 0.050)",
+        ride: coaster.isRiding() ? "RIDING" : "IDLE",
       };
     },
     // Camera-space pinch (normalised device coords) -> world-space construction.

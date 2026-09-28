@@ -57,7 +57,7 @@ export function createCoaster(root: THREE.Group, voxel: number) {
   const MAX_SPEED = 3.0;        // m/s — faster than a hand realistically draws
   const MAX_JOIN = 0.3;         // new stroke must start within this of the track end
   const RAIL_MIN_Y = voxel * 0.35;
-  const stats = { samples: 0, rejected: 0, maxStep: 0, lastReject: "" };
+  const stats = { samples: 0, rejected: 0, maxStep: 0, lastStep: 0, lastReject: "" };
   let strokeState: null | { smoothed: THREE.Vector3; lastDir: THREE.Vector3 | null; lastT: number; sinceRebuild: number } = null;
 
   function rebuild() {
@@ -196,7 +196,7 @@ export function createCoaster(root: THREE.Group, voxel: number) {
       // a sharp reversal from jitter would fold the track back on itself
       if (st.lastDir && dir.dot(st.lastDir) < -0.3) { stats.rejected++; stats.lastReject = "backtrack"; return false; }
       pts.push(st.smoothed.clone());
-      stats.samples++; stats.maxStep = Math.max(stats.maxStep, d);
+      stats.samples++; stats.maxStep = Math.max(stats.maxStep, d); stats.lastStep = d;
       st.lastDir = dir; st.lastT = now;
       if (++st.sinceRebuild >= 2) { st.sinceRebuild = 0; rebuild(); }
       return true;

@@ -481,6 +481,10 @@ export function BlockAR() {
                 <div>Rear Camera: {capability?.rearCameraAvailable ? "YES" : "NO"}</div>
                 {(() => { const d = engine.current?.diagnostics(); if (!d) return null; return (
                   <div className="mt-1 space-y-0.5 border-t border-border/40 pt-1">
+                    <div className="font-semibold text-foreground">Physical test mode</div>
+                    <div>AR session: {d.arSession} · world tracking: {d.worldTracking} · anchor: {d.anchorState}</div>
+                    <div>Hand backend: {d.handBackendLabel} · spatial input: {d.spatialInput} · hand: {d.handState}</div>
+                    <div>Construction root: {d.rootLock} · sample spacing: {d.sampleSpacing} · ride: {d.ride}</div>
                     <div>XR: {d.xrActive ? "ACTIVE" : "off"} · ref: {d.referenceSpace} · hit-test: {d.hitTest ? "on" : "off"}</div>
                     <div>Features: {d.features}</div>
                     <div>Anchor: {d.anchor}</div>
