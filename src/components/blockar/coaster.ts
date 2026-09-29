@@ -54,10 +54,10 @@ export function createCoaster(root: THREE.Group, voxel: number) {
   // Hand-drawn stroke sampling (world-space, construction-root local coords).
   // Path resolution ~0.05 m is kept separate from the 0.10 m voxel grid:
   // stroke samples are NEVER snapped to voxels.
-  const MIN_STEP = 0.05;        // target sample spacing (m)
-  const MAX_STEP = 0.25;        // larger single-step = tracking glitch → reject
-  const MAX_SPEED = 3.0;        // m/s — faster than a hand realistically draws
-  const MAX_JOIN = 0.3;         // new stroke must start within this of the track end
+  const MIN_STEP = TM.SAMPLE_SPACING;        // target sample spacing (m)
+  const MAX_STEP = TM.MAX_STEP;        // larger single-step = tracking glitch → reject
+  const MAX_SPEED = TM.MAX_SPEED;        // m/s — faster than a hand realistically draws
+  const MAX_JOIN = TM.MAX_JOIN;         // new stroke must start within this of the track end
   const stats = { samples: 0, rejected: 0, maxStep: 0, lastStep: 0, lastReject: "" };
   let strokeState: null | { smoothed: THREE.Vector3; lastDir: THREE.Vector3 | null; lastT: number; sinceRebuild: number } = null;
 
@@ -74,7 +74,7 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     length = curve.getLength();
     const segs = Math.max(12, Math.round(length / TARGET_SAMPLE));
     const up = new THREE.Vector3(0, 1, 0);
-    const offs = 0.12 * 0.5; // constant 0.12 m gauge
+    const offs = TM.GAUGE * 0.5; // constant 0.12 m gauge
     const left: THREE.Vector3[] = [], right: THREE.Vector3[] = [];
     let prevSide: THREE.Vector3 | null = null;
     let lastTieD = -Infinity, lastSupD = -Infinity;
