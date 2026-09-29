@@ -1,5 +1,6 @@
 // @ts-nocheck -- imperative three.js coaster system (spline track, supports, gravity train)
 import * as THREE from "three";
+import { TRACK_METRICS } from "./build/TrackMetrics";
 
 const G = 9.81;
 export interface TrackPoint { x: number; y: number; z: number }
@@ -15,10 +16,11 @@ export function createCoaster(root: THREE.Group, voxel: number) {
   let length = 0;
   let loop = false;
 
-  const TARGET_SAMPLE = 0.05;
-  const RAIL_RADIUS = 0.012;
-  const SPINE_RADIUS = 0.016;
-  const TIE_SPACING = 0.15;
+  const TM = TRACK_METRICS;
+  const TARGET_SAMPLE = TM.SAMPLE_SPACING;
+  const RAIL_RADIUS = TM.RAIL_RADIUS;
+  const SPINE_RADIUS = TM.SPINE_RADIUS;
+  const TIE_SPACING = TM.TIE_SPACING;
 
   const railMat = new THREE.MeshStandardMaterial({ color: "#ff3b4a", roughness: 0.35, metalness: 0.5 });
   const tieMat = new THREE.MeshStandardMaterial({ color: "#3a3f4a", roughness: 0.7 });
@@ -52,10 +54,10 @@ export function createCoaster(root: THREE.Group, voxel: number) {
   // Hand-drawn stroke sampling (world-space, construction-root local coords).
   // Path resolution ~0.05 m is kept separate from the 0.10 m voxel grid:
   // stroke samples are NEVER snapped to voxels.
-  const MIN_STEP = 0.05;        // target sample spacing (m)
-  const MAX_STEP = 0.25;        // larger single-step = tracking glitch → reject
-  const MAX_SPEED = 3.0;        // m/s — faster than a hand realistically draws
-  const MAX_JOIN = 0.3;         // new stroke must start within this of the track end
+  const MIN_STEP = TM.SAMPLE_SPACING;        // target sample spacing (m)
+  const MAX_STEP = TM.MAX_STEP;        // larger single-step = tracking glitch → reject
+  const MAX_SPEED = TM.MAX_SPEED;        // m/s — faster than a hand realistically draws
+  const MAX_JOIN = TM.MAX_JOIN;         // new stroke must start within this of the track end
   const stats = { samples: 0, rejected: 0, maxStep: 0, lastStep: 0, lastReject: "" };
   let strokeState: null | { smoothed: THREE.Vector3; lastDir: THREE.Vector3 | null; lastT: number; sinceRebuild: number } = null;
 
@@ -72,7 +74,7 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     length = curve.getLength();
     const segs = Math.max(12, Math.round(length / TARGET_SAMPLE));
     const up = new THREE.Vector3(0, 1, 0);
-    const offs = 0.12 * 0.5; // constant 0.12 m gauge
+    const offs = TM.GAUGE * 0.5; // constant 0.12 m gauge
     const left: THREE.Vector3[] = [], right: THREE.Vector3[] = [];
     let prevSide: THREE.Vector3 | null = null;
     let lastTieD = -Infinity, lastSupD = -Infinity;
@@ -176,7 +178,8 @@ export function createCoaster(root: THREE.Group, voxel: number) {
         stats.rejected++; stats.lastReject = "start too far from track end";
         strokeState = null; return false;
       }
-      strokeState = { smoothed: q.clone(), lastDir: null, lastT: now, sinceRebuild: 0 };
+      // Rebase to the actual pinch point (no bridging from the previous stroke's smoothing state).
+      strokeState = { smoothed: q.clone(), lastDir: null, lastT: now, sinceRebuild: 0, runStart: last && pts.length >= 2 ? null : (last ? last.clone() : q.clone()) };
       if (!last) { pushPoint(q); stats.samples++; rebuild(); }
       return true;
     },
@@ -185,14 +188,34 @@ export function createCoaster(root: THREE.Group, voxel: number) {
       const st = strokeState; if (!st) return false;
       const raw = p.clone();
       if (raw.distanceTo(st.smoothed) > MAX_STEP * 1.6) { stats.rejected++; stats.lastReject = "tracking jump"; return false; }
-      st.smoothed.lerp(raw, 0.35); // exponential smoothing removes hand tremor
+      st.smoothed.lerp(raw, 0.5); // light smoothing: removes tremor without lagging corners
       const last = pts[pts.length - 1]!;
       const d = st.smoothed.distanceTo(last);
       if (d < MIN_STEP) return false;
       const dt = Math.max(1, now - st.lastT) / 1000;
       if (d > MAX_STEP || d / dt > MAX_SPEED) { stats.rejected++; stats.lastReject = "impossible velocity"; st.lastT = now; return false; }
-      const dir = st.smoothed.clone().sub(last).normalize();
-      pts.push(st.smoothed.clone());
+      const next = st.smoothed.clone();
+      const dir = next.clone().sub(last).normalize();
+      // Straight-run merge: if the hand keeps going the same way, slide the run's
+      // end point forward instead of adding a new control point. A straight hand
+      // path therefore yields collinear control points → a genuinely straight spline
+      // (jittery 5 cm Catmull-Rom points were what made "straight" track wavy).
+      const prev = pts.length >= 2 ? pts[pts.length - 2]! : null;
+      if (prev && st.runStart) {
+        const runDir = last.clone().sub(st.runStart).normalize();
+        const ang = THREE.MathUtils.radToDeg(runDir.angleTo(dir));
+        const axis = next.clone().sub(st.runStart);
+        const along = axis.length();
+        const dev = along > 0 ? last.clone().sub(st.runStart).cross(axis.clone().normalize()).length() : 0;
+        if (ang < TM.STRAIGHT_ANGLE_DEG && dev < TM.STRAIGHT_TOLERANCE) {
+          last.copy(next);
+          stats.samples++; stats.lastStep = d; st.lastDir = dir; st.lastT = now;
+          if (++st.sinceRebuild >= 2) { st.sinceRebuild = 0; rebuild(); }
+          return true;
+        }
+      }
+      st.runStart = last.clone();
+      pts.push(next);
       stats.samples++; stats.maxStep = Math.max(stats.maxStep, d); stats.lastStep = d;
       st.lastDir = dir; st.lastT = now;
       if (++st.sinceRebuild >= 2) { st.sinceRebuild = 0; rebuild(); }
