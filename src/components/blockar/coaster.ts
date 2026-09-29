@@ -22,9 +22,10 @@ export function createCoaster(root: THREE.Group, voxel: number) {
   const SPINE_RADIUS = TM.SPINE_RADIUS;
   const TIE_SPACING = TM.TIE_SPACING;
 
-  const railMat = new THREE.MeshStandardMaterial({ color: "#ff3b4a", roughness: 0.35, metalness: 0.5 });
-  const tieMat = new THREE.MeshStandardMaterial({ color: "#3a3f4a", roughness: 0.7 });
-  const supMat = new THREE.MeshStandardMaterial({ color: "#ffc22e", roughness: 0.5, metalness: 0.2 });
+  const railMat = new THREE.MeshStandardMaterial({ color: "#00e5ff", roughness: 0.25, metalness: 0.6 }); // luminous cyan
+  const activeStrokeMat = new THREE.MeshStandardMaterial({ color: "#00e676", roughness: 0.3, emissive: "#00703c", emissiveIntensity: 0.4 }); // luminous green
+  const tieMat = new THREE.MeshStandardMaterial({ color: "#e2e8f0", roughness: 0.5 }); // light steel / white
+  const supMat = new THREE.MeshStandardMaterial({ color: "#00897b", roughness: 0.4, metalness: 0.3 }); // teal
   const markMat = new THREE.MeshBasicMaterial({ color: "#4dff88" });
   const markGeo = new THREE.SphereGeometry(voxel * 0.18, 12, 8);
 
@@ -171,16 +172,17 @@ export function createCoaster(root: THREE.Group, voxel: number) {
       p.y += dy * voxel; rebuild();
     },
     /** Pinch start: begin a continuous world-space stroke (local coords, metres). */
-    beginStroke(p: THREE.Vector3, now = performance.now()) {
+    beginStroke(p: THREE.Vector3, now = performance.now(), allowNewBranch = false) {
       const q = p.clone();
       const last = pts[pts.length - 1];
-      if (last && last.distanceTo(q) > MAX_JOIN) {
+      if (!allowNewBranch && last && last.distanceTo(q) > MAX_JOIN) {
         stats.rejected++; stats.lastReject = "start too far from track end";
         strokeState = null; return false;
       }
-      // Rebase to the actual pinch point (no bridging from the previous stroke's smoothing state).
       strokeState = { smoothed: q.clone(), lastDir: null, lastT: now, sinceRebuild: 0, runStart: last && pts.length >= 2 ? null : (last ? last.clone() : q.clone()) };
-      if (!last) { pushPoint(q); stats.samples++; rebuild(); }
+      if (!last || (allowNewBranch && last.distanceTo(q) > MAX_JOIN)) {
+        pushPoint(q); stats.samples++; rebuild();
+      }
       return true;
     },
     /** Pinch + move: sample at ~5 cm, smoothing jitter and rejecting glitches. */

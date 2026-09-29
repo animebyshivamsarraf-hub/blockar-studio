@@ -1,65 +1,80 @@
-# BLOCKAR STUDIO — Permanent Handoff
+# BLOCKAR STUDIO — CANONICAL DEVELOPER HANDOFF
 
-Source of truth: actual GitHub code, not historical chat claims.
+## 1. What BlockAR Studio Is
+BlockAR Studio is an augmented reality 3D voxel and procedural roller coaster design application built for web and mobile AR. Users build spatial structures in real room dimensions where 1 Three.js coordinate unit equals 1 real-world meter. It features two primary creation tracks:
+1. **Classic Voxel & Track Mode**: Grid-based voxel placement (10 cm default voxels), block manipulation, and sequential Catmull-Rom coaster waypoint placement.
+2. **Real AR Hand Mode**: Direct, unquantized hand-pinch 3D coaster extrusion in world space using WebXR Hand Tracking (or MediaPipe camera fallback on mobile) with continuous parallel rails, cross-ties, and ground stanchions.
 
-Project:
-- Lovable: https://lovable.dev/projects/f73decd4-41ff-443a-9a1f-217250d2c81c
-- GitHub: https://github.com/animebyshivamsarraf-hub/blockar-studio
-- Goal: mobile-first room-scale AR construction with rear camera, real spatial hit/depth where supported, world-locked construction, hand pinch/grab, continuous 3D coaster/voxel building, optional manual Ride.
+Canonical Repository: `https://github.com/animebyshivamsarraf-hub/blockar-studio`
+Canonical Branch: `main`
 
-NON-NEGOTIABLE:
-- CAMERA != WORLD. Phone movement must not move existing construction.
-- Rear/environment camera only.
-- 1 Three.js world unit = 1 meter.
-- User chooses start surface; create ConstructionRoot/world anchor.
-- Straight hand movement -> straight track.
-- Hand loss -> freeze; recovery -> rebase without bridging/jump.
-- Ride ONLY after explicit Ride button. Never auto-enter/follow/start.
-- Preserve voxel, coaster, AI Build, save/load, undo/redo, manual Ride.
+---
 
-AUDIT BASELINE:
-Verified: no auto-Ride; rear camera request uses environment.
-Missing/incomplete: formal SpatialProvider, SpatialHit/Surface/Anchor/Input contracts, CoordinateBridge, world anchor flow, 3D grab offset, hand freeze/rebase, iOS orientation permission flow, structured 0.05m-ish spatial coaster sampling/DDA, centralized metric geometry.
-Partial: basic Three.js root exists; GAUGE about 0.12m exists but geometry has inline constants.
+## 2. Core Architecture
+- **Framework & Runtime**: React 19, Vite, TanStack Router/Start, Tailwind CSS v4, Lucide icons.
+- **3D Engine**: Three.js (`three` r186) managed through imperative canvas loops (`src/components/blockar/engine.ts`).
+- **Spatial Anchoring (`ConstructionRoot`)**: Placed objects live in an anchored world-space group (`ConstructionRoot`). Phone/camera movement updates the view matrix; it never moves or parents the placed objects.
+- **Hand Pipeline**: `HandSystemRuntime.ts`, `PinchStateMachine.ts`, `GrabController3D.ts`, and native ARCore bridge in `native/android/`.
+- **Procedural Coaster Engine (`coaster.ts`)**: Centripetal Catmull-Rom splines, parallel-transport rail generation (0.12 m track gauge, 0.012 m rail radius, 0.016 m spine radius, 0.15 m tie spacing), and numerical energy/gravity coaster simulation.
 
-REQUIRED SPATIAL LAYER:
-src/components/blockar/spatial/
-- SpatialTypes.ts
-- SpatialProvider.ts
-- WebXRSpatialProvider.ts
-- FallbackSpatialProvider.ts
-- CoordinateBridge.ts
-Use explicit Screen -> Camera -> World -> Construction Local conversions.
-WebXR: use genuine immersive-ar/hit-test/reference space/anchors/planes/depth only where supported.
-Fallback: rear camera/orientation/calibration is NOT equivalent to native ARCore/ARKit/WebXR. Never fake true metric depth with arbitrary MediaPipe Z multipliers.
+---
 
-HAND:
-Implement world-aware SpatialInput, pinch hysteresis, grabOffset = objectWorld - pinchWorld, LOST/FROZEN/REACQUIRING states, no extrapolation or gap bridging.
+## 3. Features & Subsystems
 
-COASTER:
-Preserve TrackGeometry/TrackBuilder/RideController. World-space path; target ~0.05m sampling; DDA/Amanatides-Woo or equivalent when needed; no duplicate/gap/runaway points; no uncontrolled spline overshoot. Keep path scale separate from rail/support dimensions. Reference: gauge ~0.12m, rail radius ~0.012m, spine ~0.016m, ties ~0.15m.
+### Classic Track Mode
+- Discrete click/tap or waypoint placement on the floor or block surfaces.
+- Segment elevation adjustment (`raiseLast`), loop closing (`setLoop`), and undo point.
+- Track points are connected with spline interpolation; straight segments are collinearity-filtered to prevent Catmull-Rom overshoot.
 
-EXISTING SYSTEMS:
-Preserve blocks, voxel tools, delete, paint, grouping, height, loop, AI Build, save/load, undo/redo, manual Ride. One undo transaction per continuous stroke.
+### Real AR Hand Mode
+- Real-time continuous extrusion: Pinch down begins a stroke; moving hand extends the stroke at ~0.05 m intervals; pinch release finalizes track without triggering ride.
+- Visuals: Luminous cyan/white twin rails (`#00e5ff` / `#e2e8f0`), teal stanchions/supports (`#00897b`), and green active stroke indicator (`#00e676`).
+- Bypasses voxel `extrudeCells()` to ensure smooth 3D spline rails rather than voxel blocks.
 
-LARGE REFERENCES:
-BlockAR-Studio.zip, RollercoasterDesigner-main.zip, threejs-handtracking-101-main.zip, godot4-vehicle-framework-main.zip, Shift-main.zip, reference video and diagrams. Do not repeatedly request files over 20MB when a repository/reference URL exists; never invent private URLs.
+### Hand Tracking & Pinch Pipeline
+- Hand input reports world-space fingertip coordinates (thumb tip and index tip midpoint).
+- Hand loss triggers an immediate freeze (`xrHandFrozen = true`) to prevent phantom placement or jumps.
+- Reacquisition waits for stabilization frames and rebases (`grabController.rebase`) without bridging or teleporting.
 
-REFERENCE REPOS:
-https://github.com/collidingScopes/threejs-handtracking-101
-https://github.com/AbijahKaj/handtracker-3d
-https://github.com/stewdio/handy.js
-https://github.com/snkttrivedi/threejs-hand-interactions
-https://github.com/damiansire/web-ar-hand-tracking
-https://github.com/realitycollective/WebXR-Interactions
-https://github.com/Unity-Technologies/arfoundation-samples
-https://github.com/googlesamples/arcore-depth-lab
-Check licenses before copying.
+### Voxel & Manipulation System
+- 10 cm voxels snapping to local integer coordinates.
+- Tools: Build (extrude), Move, Delete, Paint, Group.
+- History: Full Undo/Redo stack for voxel operations.
 
-TESTS:
-rear camera; start surface; world anchor; phone movement leaves construction fixed; pinch no jump; X/Y/Z hand movement where supported; straight path; controlled curves; hand-loss freeze/rebase; release; one undo per stroke; redo; save/load; AI does not Ride; Ride only after button; exit Ride restores build mode.
+### AI Build & Persistence
+- AI Build: Natural language prompt generates structured voxel coordinate blueprints.
+- Save/Load: Serializes voxel lists and coaster spline definitions to `localStorage`.
 
-Do not claim runtime verification from static inspection. Do not claim unsupported depth/native AR.
+### Manual Ride Simulation
+- Manual-only start via Ride button. No automatic start upon building, loading, or closing a stroke.
+- Supports both third-person orbit/overview and first-person POV camera locked to train nose with banking.
+- Speed simulation includes gravity slope acceleration, friction, and chain lift minimum velocity.
 
-RECOVERY:
-Read this file first in every new Lovable session. Inspect actual source. Continue from Git state. Do not ask the user to restate the entire history. Prefer coordinated batches and verify build/typecheck after changes.
+---
+
+## 4. Verification & Build Commands
+```bash
+# Install dependencies
+bun install
+
+# Run unit tests
+bun test
+
+# Production build
+bun run build
+```
+
+---
+
+## 5. Known Limitations & Untested Items
+- **Physical Device Testing**: Hand tracking under true WebXR device sessions requires WebXR-compatible Android hardware running ARCore (Chrome AR) or native Capacitor shell. Browser webcam testing uses 2D planar projection fallback and does not provide genuine 6DOF metric hand depth.
+- **Lighting & Occlusion**: Virtual coaster rails render on top of camera video feed without depth occlusion from real-world obstacles.
+- **Git Push Access**: Push to `origin/main` on GitHub requires write authentication credentials.
+
+---
+
+## 6. Guidelines for Future AI Continuation
+1. Continue strictly from the canonical repository: `https://github.com/animebyshivamsarraf-hub/blockar-studio`.
+2. Do not create a separate repository or wipe the architecture.
+3. Keep `Classic Track` and `Real AR Hand` pipelines decoupled so improvements to one do not regress the other.
+4. Always verify with `bun test` and `bun run build` before committing.

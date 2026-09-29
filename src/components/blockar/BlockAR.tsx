@@ -45,6 +45,11 @@ export function BlockAR() {
   const [camErr, setCamErr] = useState<string | null>(null);
   const [xrOk, setXrOk] = useState(false);
   const [mode, setMode] = useState<Mode>("build");
+  const [constructionMode, setConstructionMode] = useState<"classic" | "real_ar_hand">("classic");
+  const constructionModeRef = useRef(constructionMode);
+  constructionModeRef.current = constructionMode;
+  const [toolsDrawerOpen, setToolsDrawerOpen] = useState(false);
+  const [buildMenuOpen, setBuildMenuOpen] = useState(false);
   const [shape, setShape] = useState<Shape>("cube");
   const [color, setColor] = useState<string>(COLORS[0]!);
   const [info, setInfo] = useState({ count: 0, canUndo: false, canRedo: false });
@@ -114,6 +119,7 @@ export function BlockAR() {
     const e = createEngine({
       canvas: canvasRef.current,
       getMode: () => sel.current.mode,
+      getConstructionMode: () => constructionModeRef.current,
       getShape: () => sel.current.shape,
       getColor: () => sel.current.color,
       onChange: setInfo,
@@ -379,7 +385,7 @@ export function BlockAR() {
       {!camOk && <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_70%,var(--glow),transparent_65%)]" />}
       {stage === "build" && <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />}
       <canvas ref={handCanvas} className="pointer-events-none absolute inset-0 h-full w-full" />
-      {handLabels.map((l) => (
+      {false && handLabels.map((l) => (
         <div key={l.side} className="pointer-events-none absolute -translate-x-1/2 rounded-full border border-success/60 bg-background/60 px-2 py-0.5 text-[10px] font-bold tracking-wider text-success" style={{ left: l.x, top: l.y - 38 }}>{l.text}</div>
       ))}
 
@@ -393,7 +399,105 @@ export function BlockAR() {
 
       {stage === "build" && (
         <div className="pointer-events-none absolute inset-0 flex flex-col p-3 pt-[max(env(safe-area-inset-top),12px)] pb-[max(env(safe-area-inset-bottom),12px)]">
-          {/* top */}
+          {/* Mobile Clean AR HUD */}
+          <div className="pointer-events-none mb-2 flex items-center justify-between gap-2">
+            {/* TOP LEFT: ☰ */}
+            <button
+              type="button"
+              onClick={() => setToolsDrawerOpen(!toolsDrawerOpen)}
+              className="hud pointer-events-auto flex h-10 w-10 items-center justify-center rounded-2xl border border-border/70 bg-card/90 shadow-md backdrop-blur transition-transform active:scale-95"
+              aria-label="Tools menu"
+            >
+              <Menu className="h-5 w-5 text-foreground" />
+            </button>
+
+            {/* TOP: ● AR Room Scanning / Build Ready */}
+            <div className="hud pointer-events-auto flex items-center gap-2 rounded-full border border-border/70 bg-card/90 px-3.5 py-1.5 shadow-md backdrop-blur">
+              <span className={cn("h-2.5 w-2.5 rounded-full", camOk ? "bg-success animate-pulse" : "bg-muted-foreground")} />
+              <span className="font-display text-xs font-bold uppercase tracking-wider text-foreground">AR</span>
+              <span className="text-[11px] text-muted-foreground">| {camOk ? (handSeen ? "Build Ready" : "Room Scanning") : "Virtual Floor"}</span>
+            </div>
+
+            {/* TOP RIGHT: Mode indicator */}
+            <div className="pointer-events-auto flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  const next = constructionMode === "classic" ? "real_ar_hand" : "classic";
+                  setConstructionMode(next);
+                  setToast(next === "real_ar_hand" ? "Real AR Hand Mode" : "Classic Track Mode");
+                }}
+                className={cn(
+                  "hud flex items-center gap-1.5 rounded-2xl px-3 py-2 text-xs font-semibold shadow-md backdrop-blur transition-all active:scale-95",
+                  constructionMode === "real_ar_hand" ? "border-brand-cyan bg-brand-cyan/20 text-brand-cyan ring-1 ring-brand-cyan" : "border-border/70 bg-card/90 text-foreground"
+                )}
+              >
+                <Hand className="h-4 w-4" />
+                <span>{constructionMode === "real_ar_hand" ? "Pinch to Build" : "Classic Track"}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Tools Drawer */}
+          {toolsDrawerOpen && (
+            <div className="pointer-events-auto absolute inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-border/80 bg-card/95 p-4 shadow-2xl backdrop-blur animate-in slide-in-from-left duration-200">
+              <div className="flex items-center justify-between border-b border-border/60 pb-3">
+                <div className="flex items-center gap-2 font-display text-base font-bold">
+                  <Menu className="h-5 w-5 text-brand-cyan" />
+                  <span>TOOLS</span>
+                </div>
+                <button type="button" onClick={() => setToolsDrawerOpen(false)} className="rounded-lg p-1 text-muted-foreground hover:bg-muted"><X className="h-5 w-5" /></button>
+              </div>
+              <div className="mt-4 flex flex-1 flex-col gap-1 overflow-y-auto text-sm">
+                <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Construction Mode</div>
+                <button onClick={() => { setConstructionMode("classic"); setToolsDrawerOpen(false); setToast("Classic Track Mode"); }} className={cn("flex items-center gap-3 rounded-xl px-3 py-2 font-medium", constructionMode === "classic" ? "bg-primary text-primary-foreground" : "hover:bg-muted")}>
+                  <Wand2 className="h-4 w-4" /> Classic Track
+                </button>
+                <button onClick={() => { setConstructionMode("real_ar_hand"); setToolsDrawerOpen(false); setToast("Real AR Hand Mode"); }} className={cn("flex items-center gap-3 rounded-xl px-3 py-2 font-medium", constructionMode === "real_ar_hand" ? "bg-brand-cyan text-background font-bold" : "hover:bg-muted")}>
+                  <Hand className="h-4 w-4" /> Real AR Hand
+                </button>
+
+                <div className="mt-2 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Voxel Tools</div>
+                <button onClick={() => { setMode("build"); setToolsDrawerOpen(false); }} className={cn("flex items-center gap-3 rounded-xl px-3 py-2 font-medium", mode === "build" ? "bg-muted text-foreground" : "hover:bg-muted")}>
+                  <Box className="h-4 w-4" /> Blocks
+                </button>
+                <button onClick={() => { setMode("delete"); setToolsDrawerOpen(false); }} className={cn("flex items-center gap-3 rounded-xl px-3 py-2 font-medium", mode === "delete" ? "bg-muted text-foreground" : "hover:bg-muted")}>
+                  <Trash2 className="h-4 w-4 text-destructive" /> Delete
+                </button>
+                <button onClick={() => { setMode("paint"); setToolsDrawerOpen(false); }} className={cn("flex items-center gap-3 rounded-xl px-3 py-2 font-medium", mode === "paint" ? "bg-muted text-foreground" : "hover:bg-muted")}>
+                  <Palette className="h-4 w-4 text-brand-pink" /> Paint
+                </button>
+                <button onClick={() => { setMode("group"); setToolsDrawerOpen(false); }} className={cn("flex items-center gap-3 rounded-xl px-3 py-2 font-medium", mode === "group" ? "bg-muted text-foreground" : "hover:bg-muted")}>
+                  <Layers className="h-4 w-4 text-brand-cyan" /> Group
+                </button>
+
+                <div className="mt-2 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">World & Actions</div>
+                <button onClick={() => { engine.current?.undo(); syncInfo(); setToast("Undo"); }} disabled={!info.canUndo} className="flex items-center gap-3 rounded-xl px-3 py-2 font-medium disabled:opacity-40 hover:bg-muted">
+                  <Undo2 className="h-4 w-4" /> Undo
+                </button>
+                <button onClick={() => { engine.current?.redo(); syncInfo(); setToast("Redo"); }} disabled={!info.canRedo} className="flex items-center gap-3 rounded-xl px-3 py-2 font-medium disabled:opacity-40 hover:bg-muted">
+                  <Redo2 className="h-4 w-4" /> Redo
+                </button>
+                <button onClick={() => { save(); setToolsDrawerOpen(false); }} className="flex items-center gap-3 rounded-xl px-3 py-2 font-medium hover:bg-muted">
+                  <Save className="h-4 w-4 text-brand-cyan" /> Save World
+                </button>
+                <button onClick={() => { load(); setToolsDrawerOpen(false); }} className="flex items-center gap-3 rounded-xl px-3 py-2 font-medium hover:bg-muted">
+                  <FolderOpen className="h-4 w-4 text-brand-cyan" /> Load World
+                </button>
+                <button onClick={() => { setAiOpen(true); setToolsDrawerOpen(false); }} className="flex items-center gap-3 rounded-xl px-3 py-2 font-medium hover:bg-muted">
+                  <Sparkles className="h-4 w-4 text-brand-pink" /> AI Build
+                </button>
+                <button onClick={() => { ride(); setToolsDrawerOpen(false); }} className="flex items-center gap-3 rounded-xl px-3 py-2 font-medium hover:bg-muted">
+                  <Play className="h-4 w-4 text-success" /> Ride Coaster
+                </button>
+                <button onClick={() => { setDebugOpen(!debugOpen); setToolsDrawerOpen(false); }} className="flex items-center gap-3 rounded-xl px-3 py-2 font-medium hover:bg-muted">
+                  <Camera className="h-4 w-4 text-muted-foreground" /> Settings
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* top row sub-controls */}
           <div className="flex items-start justify-between gap-2">
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2"><Logo className="h-9 w-9" /><div><div className="font-display text-xl font-bold leading-none">Block<span className="text-brand-cyan">AR</span></div><div className="text-[11px] text-muted-foreground">{info.count} blocks</div></div></div>

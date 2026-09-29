@@ -35,6 +35,7 @@ export interface SpatialInput {
 export interface EngineOpts {
   canvas: HTMLCanvasElement;
   getMode: () => Mode;
+  getConstructionMode?: () => "classic" | "real_ar_hand";
   getShape: () => Shape;
   getColor: () => string;
   onChange: (info: { count: number; canUndo: boolean; canRedo: boolean }) => void;
@@ -491,7 +492,12 @@ export function createEngine(o: EngineOpts) {
     if (isPinching && !wasPinching) {
       deviceTelemetry.log("pinch_detected", { point: local.toArray() });
       xrLastLocal = local.clone();
-      if (o.getMode() === "track") {
+      const isRealAR = o.getConstructionMode?.() === "real_ar_hand";
+      if (isRealAR) {
+        if (coaster.beginStroke(local, now, true)) {
+          o.onHint("Drawing 3D track in room — release to place");
+        }
+      } else if (o.getMode() === "track") {
         // True world-space sample, NOT snapped to the voxel grid.
         if (coaster.beginStroke(local, now)) o.onHint("Drawing track — move your hand, release to finish");
         else o.onHint("Start the pinch near the end of the existing track");
@@ -522,7 +528,10 @@ export function createEngine(o: EngineOpts) {
       const previous = xrLastLocal;
       xrLastLocal = local.clone();
       if (!previous) return;
-      if (o.getMode() === "track") {
+      const isRealAR = o.getConstructionMode?.() === "real_ar_hand";
+      if (isRealAR) {
+        coaster.extendStroke(local, now);
+      } else if (o.getMode() === "track") {
         coaster.extendStroke(local, now);
       } else if (o.getMode() === "build") {
         extrudeCells(previous, local);
@@ -546,6 +555,8 @@ export function createEngine(o: EngineOpts) {
         }
       }
     } else if (!isPinching && wasPinching) {
+      const isRealAR = o.getConstructionMode?.() === "real_ar_hand";
+      if (isRealAR) coaster.endStroke();
       if (o.getMode() === "track") coaster.endStroke();
       if (o.getMode() === "build" && stroke) {
         commit(stroke);
