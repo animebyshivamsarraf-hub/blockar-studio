@@ -439,14 +439,14 @@ export function createEngine(o: EngineOpts) {
 
     if (!local) {
       xrHandSeen = false;
-
-      if (grabController.active && now - (handSeenAt || 0) > XR_HAND_LOST_GRACE_MS) {
+      const wasPinching = handWasPinching;
+      if ((grabController.active || wasPinching) && now - (handSeenAt || 0) > XR_HAND_LOST_GRACE_MS) {
         xrHandFrozen = true;
-        grabController.freeze();
+        if (grabController.active) grabController.freeze();
         o.onHandStatus?.("frozen");
         o.onHint("HAND LOST — CONSTRUCTION FROZEN");
         deviceTelemetry.log("hand_lost", { time: now });
-      } else if (!grabController.active) {
+      } else if (!grabController.active && !wasPinching) {
         o.onHandStatus?.("lost");
       }
       return;
@@ -470,9 +470,13 @@ export function createEngine(o: EngineOpts) {
       }
       xrHandFrozen = false;
       xrReacquireFrames = 0;
-      grabController.rebase(local);
+      if (grabController.active) grabController.rebase(local);
+      const isRealAR = o.getConstructionMode?.() === "real_ar_hand";
+      if (isRealAR || o.getMode() === "track") {
+        (coaster as any).rebaseStroke?.(local, now);
+      }
       deviceTelemetry.log("hand_reacquired", { point: local.toArray() });
-      o.onHint("Hand recovered — rebased");
+      o.onHint("Hand recovered — stabilized");
       return;
     }
 

@@ -111,9 +111,10 @@ export function createCoaster(root: THREE.Group, voxel: number) {
         group.add(s);
       }
     }
+    const currentRailMat = strokeState ? activeStrokeMat : railMat;
     for (const side of [left, right]) {
       const c = new THREE.CatmullRomCurve3(side, closed, "centripetal", 0.5);
-      group.add(new THREE.Mesh(new THREE.TubeGeometry(c, segs, RAIL_RADIUS, 6, closed), railMat));
+      group.add(new THREE.Mesh(new THREE.TubeGeometry(c, segs, RAIL_RADIUS, 6, closed), currentRailMat));
     }
     group.add(new THREE.Mesh(new THREE.TubeGeometry(curve, segs, SPINE_RADIUS, 6, closed), tieMat));
   }
@@ -180,10 +181,22 @@ export function createCoaster(root: THREE.Group, voxel: number) {
         strokeState = null; return false;
       }
       strokeState = { smoothed: q.clone(), lastDir: null, lastT: now, sinceRebuild: 0, runStart: last && pts.length >= 2 ? null : (last ? last.clone() : q.clone()) };
-      if (!last || (allowNewBranch && last.distanceTo(q) > MAX_JOIN)) {
+      if (!last) {
+        pushPoint(q); stats.samples++; rebuild();
+      } else if (allowNewBranch && last.distanceTo(q) > MAX_JOIN) {
+        // Disconnected new stroke: start fresh track path to prevent runaway Catmull-Rom bridging
+        pts.length = 0;
         pushPoint(q); stats.samples++; rebuild();
       }
       return true;
+    },
+    /** Stabilize and rebase stroke after hand loss to prevent runaway leaps or bridging */
+    rebaseStroke(p: THREE.Vector3, now = performance.now()) {
+      if (strokeState) {
+        strokeState.smoothed.copy(p);
+        strokeState.lastT = now;
+        strokeState.runStart = p.clone();
+      }
     },
     /** Pinch + move: sample at ~5 cm, smoothing jitter and rejecting glitches. */
     extendStroke(p: THREE.Vector3, now = performance.now()) {

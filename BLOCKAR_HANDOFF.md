@@ -30,6 +30,7 @@ Canonical Branch: `main`
 - Real-time continuous extrusion: Pinch down begins a stroke; moving hand extends the stroke at ~0.05 m intervals; pinch release finalizes track without triggering ride.
 - Visuals: Luminous cyan/white twin rails (`#00e5ff` / `#e2e8f0`), teal stanchions/supports (`#00897b`), and green active stroke indicator (`#00e676`).
 - Bypasses voxel `extrudeCells()` to ensure smooth 3D spline rails rather than voxel blocks.
+- Hand loss freezes active track construction; reacquisition rebases stroke without teleportation, runaway spikes, or bridging across the gap.
 
 ### Hand Tracking & Pinch Pipeline
 - Hand input reports world-space fingertip coordinates (thumb tip and index tip midpoint).
