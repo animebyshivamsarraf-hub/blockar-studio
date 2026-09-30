@@ -142,7 +142,8 @@ export function BlockAR() {
         try {
           s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
         } catch {
-          s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          // BlockAR is rear-camera only. Never silently fall back to an arbitrary/front camera.
+          throw new Error("Rear camera unavailable. BlockAR requires the environment camera.");
         }
       }
       streamRef.current = s;
