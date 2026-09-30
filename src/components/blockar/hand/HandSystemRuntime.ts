@@ -187,7 +187,12 @@ export class HandSystemRuntime {
       s = external; this.externalStream = true;
     } else try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera API not available (needs HTTPS)");
-      s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+      // Rear camera only: do not silently switch to front/unspecified camera.
+      try {
+        s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+      } catch {
+        s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+      }
     } catch (e: unknown) {
       const name = e instanceof Error ? e.name : "";
       throw new Error(name === "NotAllowedError" ? "Camera permission denied — allow camera access in browser settings" : name === "NotFoundError" ? "No camera found on this device" : `Camera failed: ${e instanceof Error ? e.message : e}`);
