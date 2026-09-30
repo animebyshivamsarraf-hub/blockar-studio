@@ -77,6 +77,8 @@ export function createEngine(o: EngineOpts) {
   const grid = new THREE.GridHelper(4, 40, 0x3ee8ff, 0x2a6a80);
   (grid.material as THREE.Material).transparent = true;
   (grid.material as THREE.Material).opacity = 0.35;
+  // No fake room grid: the real camera/room stays visible. Placement uses the reticle.
+  grid.visible = false;
   root.add(grid);
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ visible: false }));
   root.add(floor);
@@ -660,7 +662,7 @@ export function createEngine(o: EngineOpts) {
         }
         root.updateMatrixWorld(true);
         reticle.visible = false;
-        anchored = true; grid.visible = true;
+        anchored = true; grid.visible = false;
         o.onHint(`ANCHOR LOCKED ON ${surfaceHit.surfaceType.toUpperCase()} — build stays in your room`);
       }
       // center-screen ray: face adjacency first
@@ -677,7 +679,7 @@ export function createEngine(o: EngineOpts) {
         root.position.set(0, 0, 0); root.quaternion.identity();
       }
       preserveAnchorOnEnd = false;
-      grid.visible = true; placeCam();
+      grid.visible = false; placeCam();
     });
 
   }

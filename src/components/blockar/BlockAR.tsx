@@ -448,7 +448,7 @@ export function BlockAR() {
             <div className="flex flex-col items-end gap-2">
               <div className="hud flex items-center gap-2 px-3 py-2 text-xs">
                 <Camera className="h-4 w-4" />
-                <span>{camOk ? "Back camera" : "Virtual floor"}</span>
+                <span>{camOk ? "Back camera" : "Camera off"}</span>
                 <span className={cn("h-2 w-2 rounded-full", camOk ? "bg-success" : "bg-muted-foreground")} />
               </div>
               {xrOk && !engine.current?.isXR() && (
