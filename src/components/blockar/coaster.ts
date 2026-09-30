@@ -22,7 +22,7 @@ export function createCoaster(root: THREE.Group, voxel: number) {
   const SPINE_RADIUS = TM.SPINE_RADIUS;
   const TIE_SPACING = TM.TIE_SPACING;
 
-  const railMat = new THREE.MeshStandardMaterial({ color: "#00e5ff", roughness: 0.25, metalness: 0.6 }); // luminous cyan
+  const railMat = new THREE.MeshStandardMaterial({ color: "#f1fbff", roughness: 0.3, metalness: 0.4, emissive: "#2fd8ff", emissiveIntensity: 0.25 }); // white rail, subtle cyan glow
   const activeStrokeMat = new THREE.MeshStandardMaterial({ color: "#00e676", roughness: 0.3, emissive: "#00703c", emissiveIntensity: 0.4 }); // luminous green
   const tieMat = new THREE.MeshStandardMaterial({ color: "#e2e8f0", roughness: 0.5 }); // light steel / white
   const supMat = new THREE.MeshStandardMaterial({ color: "#00897b", roughness: 0.4, metalness: 0.3 }); // teal
@@ -77,22 +77,25 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     const up = new THREE.Vector3(0, 1, 0);
     const offs = TM.GAUGE * 0.5; // constant 0.12 m gauge
     const left: THREE.Vector3[] = [], right: THREE.Vector3[] = [];
-    let prevSide: THREE.Vector3 | null = null;
+    let prevSide: THREE.Vector3 | null = null; let prevTan: THREE.Vector3 | null = null;
     let lastTieD = -Infinity, lastSupD = -Infinity;
     for (let i = 0; i <= segs; i++) {
       const t = i / segs;
       const p = curve.getPointAt(t);
       const tan = curve.getTangentAt(t).normalize();
-      // Parallel-transport style side vector: prefer world-up banking, fall back
-      // to the previous frame near vertical, and never allow a 180° flip.
-      let side = new THREE.Vector3().crossVectors(tan, up);
-      if (side.lengthSq() < 0.04 && prevSide) {
-        side = prevSide.clone().sub(tan.clone().multiplyScalar(prevSide.dot(tan)));
+      // True parallel transport: rotate the previous frame by the tangent change so
+      // the rails can never flip/cross; gently re-level toward world-up when possible.
+      let side: THREE.Vector3;
+      if (!prevSide || !prevTan) {
+        side = new THREE.Vector3().crossVectors(tan, up);
+        if (side.lengthSq() < 1e-4) side.set(1, 0, 0);
+      } else {
+        side = prevSide.clone().applyQuaternion(new THREE.Quaternion().setFromUnitVectors(prevTan, tan));
+        const level = new THREE.Vector3().crossVectors(tan, up);
+        if (level.lengthSq() > 0.09) { level.normalize(); if (level.dot(side) < 0) level.negate(); side.lerp(level, 0.15); }
       }
-      if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
-      side.normalize();
-      if (prevSide && side.dot(prevSide) < 0) side.negate();
-      prevSide = side.clone();
+      side.sub(tan.clone().multiplyScalar(side.dot(tan))).normalize();
+      prevSide = side.clone(); prevTan = tan.clone();
       side.multiplyScalar(offs);
       left.push(p.clone().add(side)); right.push(p.clone().sub(side));
       const d = t * length;
@@ -109,11 +112,14 @@ export function createCoaster(root: THREE.Group, voxel: number) {
         const s = new THREE.Mesh(new THREE.CylinderGeometry(voxel * 0.06, voxel * 0.08, h, 8), supMat);
         s.position.set(p.x, h / 2, p.z);
         group.add(s);
+        const base = new THREE.Mesh(new THREE.CylinderGeometry(voxel * 0.14, voxel * 0.16, voxel * 0.03, 12), supMat);
+        base.position.set(p.x, voxel * 0.015, p.z);
+        group.add(base);
       }
     }
     const currentRailMat = strokeState ? activeStrokeMat : railMat;
     for (const side of [left, right]) {
-      const c = new THREE.CatmullRomCurve3(side, closed, "centripetal", 0.5);
+      const c = new THREE.CatmullRomCurve3(side, closed, "centripetal");
       group.add(new THREE.Mesh(new THREE.TubeGeometry(c, segs, RAIL_RADIUS, 6, closed), currentRailMat));
     }
     group.add(new THREE.Mesh(new THREE.TubeGeometry(curve, segs, SPINE_RADIUS, 6, closed), tieMat));
