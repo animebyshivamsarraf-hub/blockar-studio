@@ -83,6 +83,7 @@ export class HandSystemRuntime {
     private video: HTMLVideoElement,
     private overlayRoot: HTMLElement,
     private onDiag: (d: HandDiagnostics) => void,
+    private opts: { testCube?: boolean } = {},
   ) {
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -99,7 +100,9 @@ export class HandSystemRuntime {
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(this.cube.geometry), new THREE.LineBasicMaterial({ color: 0xbfeeff }));
     this.cube.add(edges);
     this.resetCube();
-    this.scene.add(this.cube);
+    // The grab-test cube only exists in the Hand Lab; the main builder never spawns it.
+    this.cube.visible = this.opts.testCube !== false;
+    if (this.cube.visible) this.scene.add(this.cube);
 
     const mk = (side: Side): HandState => {
       const skeleton = new HandSkeleton3D(HAND_COLORS[side]);
@@ -444,6 +447,7 @@ export class HandSystemRuntime {
   }
 
   private isNearCube(h: HandState, cam: THREE.Camera): boolean {
+    if (this.opts.testCube === false) return false;
     const d = h.pinchPoint.distanceTo(this.cube.position);
     if (d < CUBE_SIZE * 0.9 + 0.03) return true;
     if (this.backend === "WEBXR") return false;

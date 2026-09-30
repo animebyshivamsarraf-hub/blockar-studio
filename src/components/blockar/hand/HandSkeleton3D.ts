@@ -31,13 +31,13 @@ export class HandSkeleton3D {
   private boneMat: THREE.MeshBasicMaterial;
 
   constructor(color = 0x4de8ff, private smoothing = 0.55) {
-    this.jointMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false });
-    this.boneMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false });
+    this.jointMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
+    this.boneMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false });
     const jointGeo = new THREE.SphereGeometry(1, 12, 8);
     const boneGeo = new THREE.CylinderGeometry(1, 1, 1, 8, 1, true);
     for (let i = 0; i < 21; i++) {
       const m = new THREE.Mesh(jointGeo, this.jointMat);
-      const r = i === 0 ? 0.013 : TIPS.has(i) ? 0.0085 : 0.0072;
+      const r = i === 0 ? 0.006 : TIPS.has(i) ? 0.0042 : 0.0032;
       m.scale.setScalar(r);
       m.renderOrder = 10;
       this.joints.push(m);
@@ -55,7 +55,7 @@ export class HandSkeleton3D {
     this.palmPos = new Float32Array(PALM.length * 3);
     geo.setAttribute("position", new THREE.BufferAttribute(this.palmPos, 3));
     geo.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5]);
-    this.palm = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.22, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
+    this.palm = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.08, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
     this.palm.frustumCulled = false;
     this.group.add(this.palm);
     this.group.visible = false;
@@ -78,7 +78,7 @@ export class HandSkeleton3D {
       this.tmpA.subVectors(B, A);
       const len = this.tmpA.length();
       bone.position.copy(A).addScaledVector(this.tmpA, 0.5);
-      bone.scale.set(0.0042, Math.max(len, 1e-4), 0.0042);
+      bone.scale.set(0.0018, Math.max(len, 1e-4), 0.0018);
       if (len > 1e-5) bone.quaternion.setFromUnitVectors(UP, this.tmpB.copy(this.tmpA).divideScalar(len));
     }
     PALM.forEach((idx, k) => {

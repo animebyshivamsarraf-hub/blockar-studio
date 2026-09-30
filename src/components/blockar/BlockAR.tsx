@@ -167,12 +167,24 @@ export function BlockAR() {
 
   async function enterXR() {
     if (!engine.current || !overlayRef.current) return;
+    const handsWereOn = hand === "on" && backendType === "MEDIAPIPE FALLBACK";
     try {
-      streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setCamOk(false);
+      // Try to start AR while the rear camera (and MediaPipe hand tracking) stay alive.
       await engine.current.startXR(overlayRef.current);
       setToast("AR on — choose a surface, then pinch to build");
-    } catch (err) { setToast((err as Error).message || "AR could not start"); }
+    } catch {
+      // Some browsers only grant AR when no other camera stream is open: release it once and retry.
+      try {
+        stopHands.current?.(); stopHands.current = null;
+        streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setCamOk(false);
+        await engine.current.startXR(overlayRef.current);
+        setToast("AR on — choose a surface, then pinch to build");
+      } catch (err) { setToast((err as Error).message || "AR could not start"); }
+    }
+    // Keep hand control alive: native XR joints if exposed, otherwise re-attach the camera tracker.
+    if (handsWereOn && !handRuntime.current) { setHand("off"); setTimeout(() => { void toggleHandsRef.current?.(); }, 300); }
   }
+  const toggleHandsRef = useRef<(() => Promise<void>) | null>(null);
 
   useEffect(() => { engine.current?.setScale(1); }, [size, stage]);
   useEffect(() => () => stopHands.current?.(), []);
@@ -248,7 +260,7 @@ export function BlockAR() {
         // Hand gone → freeze the world construction instead of teleporting it.
         if (!l) { engine.current?.handLost(); setPinch(false); }
         if (d.system === "ERROR" && d.error) { setHand("error"); setHandError(d.error); }
-      });
+      }, { testCube: false });
       // Feed the tracked pinch into the WORLD-space construction pipeline.
       // x/y are only used to cast a ray through the live AR camera; the object
       // position itself is computed in the anchored world coordinate system.
@@ -278,6 +290,7 @@ export function BlockAR() {
       setToast(`Error: ${reason}`);
     }
   }
+  toggleHandsRef.current = toggleHands;
   function clearHandCanvas() { /* 3D hand layer clears itself on stop */ }
 
   async function runAI() {
@@ -448,7 +461,7 @@ export function BlockAR() {
             <div className="flex flex-col items-end gap-2">
               <div className="hud flex items-center gap-2 px-3 py-2 text-xs">
                 <Camera className="h-4 w-4" />
-                <span>{camOk ? "Back camera" : "Virtual floor"}</span>
+                <span>{camOk ? "Back camera" : "Camera off"}</span>
                 <span className={cn("h-2 w-2 rounded-full", camOk ? "bg-success" : "bg-muted-foreground")} />
               </div>
               {xrOk && !engine.current?.isXR() && (
