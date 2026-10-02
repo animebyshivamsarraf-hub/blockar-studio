@@ -153,8 +153,11 @@ export function BlockAR() {
         await videoRef.current.play().catch(() => {});
       }
       deviceTelemetry.log("fallback_selected", { mode: "rear_camera_video" });
-      setStage("scanning");
-      setTimeout(() => setStage("build"), 1800);
+      // Do not fake a surface-scan delay in the camera fallback. Real room
+      // tracking is provided only by WebXR hit-test/anchors; the fallback is
+      // explicitly a live rear-camera + optical hand mode.
+      setStage("build");
+      setToast("Rear camera ready · tap Start WebXR AR for room tracking");
       return s;
     } catch (err: any) {
       const errMsg = err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError"
