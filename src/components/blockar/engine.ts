@@ -738,6 +738,7 @@ export function createEngine(o: EngineOpts) {
   const fake = (x: number, y: number) => ({ pointerId: 999, clientX: x, clientY: y } as PointerEvent);
   return {
     resize,
+    getCamera() { return camera; },
     synth(type: "down" | "move" | "up", x: number, y: number) {
       if (type === "down") down(fake(x, y)); else if (type === "move") move(fake(x, y)); else up(fake(x, y));
     },
@@ -770,10 +771,21 @@ export function createEngine(o: EngineOpts) {
     isAnchored: () => anchored,
     spatialHit: () => surfaceHit,
     // Camera-space pinch (normalised device coords) -> world-space construction.
-    handSample(nx: number, ny: number, pinching: boolean) {
+    handSample(nx: number, ny: number, pinching: boolean, point3D?: THREE.Vector3) {
       if (!xrHandTrackingEnabled) return;
       // Native XR hands take priority — never mix the two sources.
       if (xrSession && Array.from(xrSession.inputSources).some((s) => !!s.hand)) return;
+
+      // Preferred MediaPipe path: use the actual 3D pinch point produced by the
+      // hand runtime. The runtime shares this engine camera, so this transform is
+      // camera-space -> world-space -> ConstructionRoot-local. Screen coordinates
+      // are retained only as a legacy fallback when no 3D point is available.
+      if (point3D) {
+        const world = activeCamera().localToWorld(point3D.clone());
+        processHandSample(root.worldToLocal(world), pinching);
+        return;
+      }
+
       const world = worldFromScreen(nx, ny);
       processHandSample(world ? root.worldToLocal(world) : null, pinching);
     },
