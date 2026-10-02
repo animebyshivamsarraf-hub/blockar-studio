@@ -245,10 +245,12 @@ export function BlockAR() {
       }
       if (!activeStream) throw new Error("Camera could not be activated");
       if (!handCanvas.current) throw new Error("Hand layer not mounted");
+      const hv = videoRef.current;
+      if (!hv) throw new Error("Rear camera video layer not mounted");
 
       setHand("initializing");
-      const hv = document.createElement("video");
-      hv.muted = true; hv.playsInline = true;
+      hv.muted = true;
+      hv.playsInline = true;
       let anyHand = false;
       const rt = new HandSystemRuntime(handCanvas.current, hv, overlayRef.current ?? document.body, (d) => {
         const l = d.left.status === "tracking" || d.right.status === "tracking";
@@ -261,15 +263,18 @@ export function BlockAR() {
         // Hand gone → freeze the world construction instead of teleporting it.
         if (!l) { engine.current?.handLost(); setPinch(false); }
         if (d.system === "ERROR" && d.error) { setHand("error"); setHandError(d.error); }
-      }, { testCube: false });
+      }, { testCube: false, camera: e0?.getCamera() });
       // Feed the tracked pinch into the WORLD-space construction pipeline.
       // x/y are only used to cast a ray through the live AR camera; the object
       // position itself is computed in the anchored world coordinate system.
-      rt.onPinchCursor = (_side, x, y, held) => {
+      rt.onPinchCursor = (_side, x, y, held, point3D) => {
         const e = engine.current; if (!e || !anyHand) return;
         const nx = (x / window.innerWidth) * 2 - 1;
         const ny = -(y / window.innerHeight) * 2 + 1;
-        e.handSample(nx, ny, held);
+        // Prefer the tracked 3D pinch point. The hand runtime and engine share the
+        // same camera, so the engine can transform this point into the anchored
+        // ConstructionRoot without re-projecting through a 2D cursor.
+        e.handSample(nx, ny, held, point3D);
         setPinch(held);
       };
       handRuntime.current = rt;
