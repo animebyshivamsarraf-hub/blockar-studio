@@ -69,7 +69,7 @@ export class HandSystemRuntime {
   private xrStartT = 0;
   private xrFallbackPending = false;
   /** screen-space pinch cursor per hand (only when not grabbing the test cube) */
-  onPinchCursor: ((side: Side, x: number, y: number, held: boolean) => void) | null = null;
+  onPinchCursor: ((side: Side, x: number, y: number, held: boolean, point3D?: THREE.Vector3) => void) | null = null;
   private mouse = { x: 0, y: 0, down: false, pinch: 0, inside: false };
 
   private fps = 0;
@@ -83,12 +83,14 @@ export class HandSystemRuntime {
     private video: HTMLVideoElement,
     private overlayRoot: HTMLElement,
     private onDiag: (d: HandDiagnostics) => void,
-    private opts: { testCube?: boolean } = {},
+    private opts: { testCube?: boolean; camera?: THREE.PerspectiveCamera } = {},
   ) {
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.xr.enabled = true;
-    this.camera = new THREE.PerspectiveCamera(60, 1, 0.01, 50);
+    // BlockAR can provide its construction camera so MediaPipe lifting, hand
+    // rendering, and the pinch-to-world transform all share one camera.
+    this.camera = this.opts.camera ?? new THREE.PerspectiveCamera(60, 1, 0.01, 50);
 
     this.scene.add(new THREE.HemisphereLight(0xdfefff, 0x334455, 1.4));
     const dir = new THREE.DirectionalLight(0xffffff, 1.6);
@@ -227,10 +229,13 @@ export class HandSystemRuntime {
   private async teardown() {
     const s = this.xrSession; this.xrSession = null;
     if (s) { try { await s.end(); } catch { /* already ended */ } }
-    if (!this.externalStream) this.stream?.getTracks().forEach((t) => t.stop());
+    const keepExternalVideo = this.externalStream;
+    if (!keepExternalVideo) this.stream?.getTracks().forEach((t) => t.stop());
     this.externalStream = false;
     this.stream = null;
-    this.video.srcObject = null;
+    // The BlockAR DOM video owns the shared rear-camera stream. Do not blank it
+    // when hand tracking is stopped/restarted.
+    if (!keepExternalVideo) this.video.srcObject = null;
     try { this.landmarker?.close(); } catch { /* ignore */ }
     this.landmarker = null;
     this.mpFrame = {};
@@ -447,7 +452,13 @@ export class HandSystemRuntime {
     h.skeleton.setColor(this.owner === h.side ? 0x7dffb0 : HAND_COLORS[h.side]);
     if (this.onPinchCursor && this.owner !== h.side) {
       const sp = h.pinchPoint.clone().project(cam);
-      this.onPinchCursor(h.side, (sp.x + 1) / 2 * window.innerWidth, (1 - sp.y) / 2 * window.innerHeight, h.pinch.held);
+      this.onPinchCursor(
+        h.side,
+        (sp.x + 1) / 2 * window.innerWidth,
+        (1 - sp.y) / 2 * window.innerHeight,
+        h.pinch.held,
+        h.pinchPoint.clone(),
+      );
     }
   }
 
