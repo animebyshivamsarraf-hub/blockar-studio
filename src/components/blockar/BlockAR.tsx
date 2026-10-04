@@ -137,10 +137,20 @@ export function BlockAR() {
     try {
       let s: MediaStream;
       try {
-        s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" } }, audio: false });
+        s = await navigator.mediaDevices.getUserMedia({ video: {
+          facingMode: { exact: "environment" },
+          width: { ideal: 960, max: 960 },
+          height: { ideal: 540, max: 540 },
+        },
+        audio: false });
       } catch {
         try {
-          s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+          s = await navigator.mediaDevices.getUserMedia({ video: {
+              facingMode: "environment",
+              width: { ideal: 960, max: 960 },
+              height: { ideal: 540, max: 540 },
+            },
+            audio: false });
         } catch {
           // BlockAR is rear-camera only. Never silently fall back to an arbitrary/front camera.
           throw new Error("Rear camera unavailable. BlockAR requires the environment camera.");
