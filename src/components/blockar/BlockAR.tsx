@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Box, Camera, Check, Circle, Cylinder, Hand, Move, Paintbrush, Redo2, Save, FolderOpen, Trash2, Triangle, Undo2, Group, ScanLine, Pointer } from "lucide-react";
 import { COLORS, createEngine, type Engine, type Mode, type Shape } from "./engine";
 import { cn } from "@/lib/utils";
-import { HandSystemRuntime } from "./hand/HandSystemRuntime";
+import { HandSystemRuntime, isEnvironmentStream } from "./hand/HandSystemRuntime";
 import { aiBuild } from "@/lib/ai-build.functions";
 import { Sparkles, Loader2, X, Spline, Play, Square, ArrowUp, ArrowDown, Repeat, Eye, Wand2 } from "lucide-react";
 
@@ -146,6 +146,10 @@ export function BlockAR() {
           throw new Error("Rear camera unavailable. BlockAR requires the environment camera.");
         }
       }
+      if (!(await isEnvironmentStream(s))) {
+        s.getTracks().forEach((t) => t.stop());
+        throw new Error("Rear camera required — the opened camera is not the environment camera.");
+      }
       streamRef.current = s;
       setCamOk(true);
       if (videoRef.current) {
@@ -267,18 +271,24 @@ export function BlockAR() {
         if (!l) { engine.current?.handLost(); setPinch(false); }
         if (d.system === "ERROR" && d.error) { setHand("error"); setHandError(d.error); }
       }, { testCube: false, camera: e0?.getCamera() });
-      // Feed the tracked pinch into the WORLD-space construction pipeline.
-      // x/y are only used to cast a ray through the live AR camera; the object
-      // position itself is computed in the anchored world coordinate system.
-      rt.onPinchCursor = (_side, x, y, held, point3D) => {
+      // MediaPipe lifted point is already WORLD SPACE. Send it directly;
+      // engine converts world -> ConstructionRoot local exactly once.
+      rt.onPinchWorld = (_side, world, held) => {
         const e = engine.current; if (!e || !anyHand) return;
+        e.handSamplePoint(world, held);
+        setPinch(held);
+      };
+      // Screen/ray fallback is reserved for native XR hand input.
+      rt.onPinchCursor = (_side, x, y, held) => {
+        const e = engine.current; if (!e || !anyHand || !e.isXR()) return;
         const nx = (x / window.innerWidth) * 2 - 1;
         const ny = -(y / window.innerHeight) * 2 + 1;
-        // Prefer the tracked 3D pinch point. The hand runtime and engine share the
-        // same camera, so the engine can transform this point into the anchored
-        // ConstructionRoot without re-projecting through a 2D cursor.
-        e.handSample(nx, ny, held, point3D);
+        e.handSample(nx, ny, held);
         setPinch(held);
+      };
+      rt.onOwnerLost = () => {
+        engine.current?.handLost();
+        setPinch(false);
       };
       handRuntime.current = rt;
       stopHands.current = () => { rt.dispose(); handRuntime.current = null; setHandLabels([]); engine.current?.handLost(); };
@@ -499,7 +509,7 @@ export function BlockAR() {
               <div className="mt-1 space-y-0.5">
                 <div>Backend: {capability?.backend || "detecting..."}</div>
                 <div>WebXR: {capability?.webxrSupported ? "YES" : "NO"} | AR: {capability?.immersiveArSupported ? "YES" : "NO"} | Hands: {capability?.handTrackingSupported ? "YES" : "NO"}</div>
-                <div>Rear Camera: {capability?.rearCameraAvailable ? "YES" : "NO"}</div>
+                <div>Rear Camera: {capability ? capability.rearCameraAvailable.toUpperCase() : "detecting..."}</div>
                 {capability?.backend === "fallback-rear" && (
                   <div className="text-amber-400">{FALLBACK_LIMITATION}</div>
                 )}

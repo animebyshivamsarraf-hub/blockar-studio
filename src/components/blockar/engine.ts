@@ -770,24 +770,29 @@ export function createEngine(o: EngineOpts) {
     },
     isAnchored: () => anchored,
     spatialHit: () => surfaceHit,
-    // Camera-space pinch (normalised device coords) -> world-space construction.
+    // Screen-space fallback: used when no lifted world point is available.
+    // If point3D is supplied, it is already WORLD SPACE and must never be
+    // passed through camera.localToWorld() again.
     handSample(nx: number, ny: number, pinching: boolean, point3D?: THREE.Vector3) {
       if (!xrHandTrackingEnabled) return;
-      // Native XR hands take priority — never mix the two sources.
       if (xrSession && Array.from(xrSession.inputSources).some((s) => !!s.hand)) return;
 
-      // Preferred MediaPipe path: use the actual 3D pinch point produced by the
-      // hand runtime. The runtime shares this engine camera, so this transform is
-      // camera-space -> world-space -> ConstructionRoot-local. Screen coordinates
-      // are retained only as a legacy fallback when no 3D point is available.
       if (point3D) {
-        const world = activeCamera().localToWorld(point3D.clone());
-        processHandSample(root.worldToLocal(world), pinching);
+        processHandSample(root.worldToLocal(point3D.clone()), pinching);
         return;
       }
 
       const world = worldFromScreen(nx, ny);
       processHandSample(world ? root.worldToLocal(world) : null, pinching);
+    },
+
+    // World-space pinch point from the lifted MediaPipe hand skeleton.
+    // Contract: input is already WORLD SPACE; convert to ConstructionRoot-local
+    // exactly once and never re-project through the camera.
+    handSamplePoint(world: THREE.Vector3 | null, pinching: boolean) {
+      if (!xrHandTrackingEnabled) return;
+      if (xrSession && Array.from(xrSession.inputSources).some((s) => !!s.hand)) return;
+      processHandSample(world ? root.worldToLocal(world.clone()) : null, pinching);
     },
     handLost() {
       if (!xrHandTrackingEnabled) return;

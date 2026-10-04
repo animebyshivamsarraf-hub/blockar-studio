@@ -5,7 +5,8 @@ export interface CapabilityReport {
   webxrSupported: boolean;
   immersiveArSupported: boolean;
   handTrackingSupported: boolean;
-  rearCameraAvailable: boolean;
+  /** Tri-state: confirmed rear camera, no camera, or unknown/unlabeled. */
+  rearCameraAvailable: "yes" | "no" | "unknown";
   details: string[];
 }
 
@@ -74,7 +75,7 @@ export async function detectDeviceCapabilities(): Promise<CapabilityReport> {
   let webxrSupported = false;
   let immersiveArSupported = false;
   let handTrackingSupported = false;
-  let rearCameraAvailable = false;
+  let rearCameraAvailable: "yes" | "no" | "unknown" = "unknown";
 
   if (xr) {
     webxrSupported = true;
@@ -106,22 +107,26 @@ export async function detectDeviceCapabilities(): Promise<CapabilityReport> {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoInputs = devices.filter((d) => d.kind === "videoinput");
-      rearCameraAvailable = videoInputs.some(
-        (d) => /back|rear|environment/i.test(d.label) || videoInputs.length > 0
-      );
-      if (rearCameraAvailable) {
+      if (!videoInputs.length) {
+        rearCameraAvailable = "no";
+        details.push("No video input devices found");
+      } else if (videoInputs.some((d) => /back|rear|environment/i.test(d.label))) {
+        rearCameraAvailable = "yes";
         details.push("Rear camera device detected");
+      } else {
+        rearCameraAvailable = "unknown";
+        details.push("Video inputs present but rear camera not confirmed (unlabeled/generic)");
       }
     } catch {
-      rearCameraAvailable = true;
-      details.push("Media devices query deferred");
+      rearCameraAvailable = "unknown";
+      details.push("Media devices query failed — rear camera unconfirmed");
     }
   }
 
   let backend: DeviceBackend = "unsupported";
   if (immersiveArSupported) {
     backend = handTrackingSupported ? "webxr-hand" : "webxr-ar";
-  } else if (rearCameraAvailable || (typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia)) {
+  } else if (rearCameraAvailable !== "no" || (typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia)) {
     backend = "fallback-rear";
     deviceTelemetry.log("fallback_selected", { mode: "rear_camera_mediapipe" });
   } else {
