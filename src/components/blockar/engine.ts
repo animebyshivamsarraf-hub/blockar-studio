@@ -27,8 +27,12 @@ export interface EngineOpts {
 }
 
 export function createEngine(o: EngineOpts) {
-  const renderer = new THREE.WebGLRenderer({ canvas: o.canvas, alpha: true, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const isPhone = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+  // BlockAR renders a main 3D scene plus a separate hand-tracking overlay.
+  // On phones, avoid a 2x/3x backing buffer and MSAA on both renderers;
+  // otherwise GPU pressure can make the live AR camera visibly freeze.
+  const renderer = new THREE.WebGLRenderer({ canvas: o.canvas, alpha: true, antialias: !isPhone });
+  renderer.setPixelRatio(isPhone ? 1 : Math.min(window.devicePixelRatio, 2));
   renderer.xr.enabled = true;
   // WebXR hand visuals are a separate 3D layer from construction/selection.
   // Three.js uses the public WebXR Input Profiles generic-hand assets for the mesh profile.
