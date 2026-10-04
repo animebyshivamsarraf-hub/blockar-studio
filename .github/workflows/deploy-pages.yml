@@ -1,4 +1,5 @@
 name: Deploy BlockAR to GitHub Pages
+# Triggered deployment workflow: publish every main update to GitHub Pages.
 
 on:
   push:
