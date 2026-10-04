@@ -62,6 +62,11 @@ export function resolveCursorOwner(
 const LOST_GRACE_MS = 180;
 const REACQUIRE_FRAMES = 2;
 const CUBE_SIZE = 0.08;
+// Phone AR must keep the camera/render loop responsive. MediaPipe's
+// detectForVideo() is synchronous, so running it on every render frame can
+// stall Chrome on mid-range phones. Hand tracking remains responsive at a
+// bounded 15 FPS while the camera and 3D scene continue rendering normally.
+const MP_INTERVAL_MS = 1000 / 15;
 const HAND_COLORS: Record<Side, number> = { left: 0x7fb8ff, right: 0x4de8ff };
 
 interface HandState {
@@ -96,6 +101,7 @@ export class HandSystemRuntime {
   private stream: MediaStream | null = null;
   private landmarker: HandLandmarker | null = null;
   private lastVideoTime = -1;
+  private lastMpDetectT = 0;
   private mpFrame: Partial<Record<Side, ScreenLandmark[]>> = {};
   private xrSession: XRSession | null = null;
   private externalStream = false;
@@ -123,8 +129,11 @@ export class HandSystemRuntime {
     private onDiag: (d: HandDiagnostics) => void,
     private opts: { testCube?: boolean; camera?: THREE.PerspectiveCamera } = {},
   ) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const isPhone = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+    this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: !isPhone });
+    // The hand layer is an overlay; on phones a 2x/3x backing buffer wastes
+    // GPU time and competes with the camera + main BlockAR renderer.
+    this.renderer.setPixelRatio(isPhone ? 1 : Math.min(window.devicePixelRatio, 2));
     this.renderer.xr.enabled = true;
     // BlockAR can provide its construction camera so MediaPipe lifting, hand
     // rendering, and the pinch-to-world transform all share one camera.
@@ -283,6 +292,7 @@ export class HandSystemRuntime {
     this.landmarker = null;
     this.mpFrame = {};
     this.lastVideoTime = -1;
+    this.lastMpDetectT = 0;
     this.backend = "NONE";
     this.session = "idle";
     if (this.grab.active) this.grab.releaseGrab();
@@ -384,8 +394,12 @@ export class HandSystemRuntime {
   private sampleMediaPipe(now: number, out: Partial<Record<Side, THREE.Vector3[]>>) {
     const lm = this.landmarker, v = this.video;
     if (!lm || v.readyState < 2) return;
-    if (v.currentTime !== this.lastVideoTime) {
+    // Do not call MediaPipe synchronously on every WebGL frame. The previous
+    // implementation could execute 30–60 detector calls/sec on a phone,
+    // blocking the main thread and making the AR camera appear to freeze.
+    if (v.currentTime !== this.lastVideoTime && now - this.lastMpDetectT >= MP_INTERVAL_MS) {
       this.lastVideoTime = v.currentTime;
+      this.lastMpDetectT = now;
       try {
         const res = lm.detectForVideo(v, now);
         const W = window.innerWidth, H = window.innerHeight;
