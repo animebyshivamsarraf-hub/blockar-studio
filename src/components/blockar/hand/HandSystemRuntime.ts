@@ -59,8 +59,8 @@ export function resolveCursorOwner(
   return cands.includes("right") ? "right" : cands[0] ?? null;
 }
 
-const LOST_GRACE_MS = 180;
-const REACQUIRE_FRAMES = 2;
+const LOST_GRACE_MS = 500;
+const REACQUIRE_FRAMES = 3;
 const CUBE_SIZE = 0.08;
 // Phone AR must keep the camera/render loop responsive. MediaPipe's
 // detectForVideo() is synchronous, so running it on every render frame can
@@ -323,11 +323,16 @@ export class HandSystemRuntime {
         if (data.type === "READY") {
           window.clearTimeout(timer);
           this.workerReady = true;
-          this.session = "camera live · MediaPipe worker";
+          this.session = data.delegate === "CPU" ? "camera live · MediaPipe worker · CPU fallback" : "camera live · MediaPipe worker · GPU";
           resolve();
         } else if (data.type === "RESULT") {
           this.workerBusy = false;
           this.consumeMediaPipeResult(data.result, this.video);
+        } else if (data.type === "RUNTIME_FALLBACK") {
+          this.workerBusy = false;
+          this.mpIntervalMs = MP_INTERVAL_CPU_MS;
+          this.error = null;
+          this.session = "camera live · MediaPipe worker · CPU fallback";
         } else if (data.type === "DETECT_ERROR") {
           this.workerBusy = false;
           this.error = data.error ?? "MediaPipe worker detection failed";
