@@ -103,6 +103,7 @@ export class HandSystemRuntime {
   private lastVideoTime = -1;
   private lastMpDetectT = 0;
   private mpFrame: Partial<Record<Side, ScreenLandmark[]>> = {};
+  private mpGeneration = 0;
   private xrSession: XRSession | null = null;
   private externalStream = false;
   private xrStartT = 0;
@@ -257,9 +258,24 @@ export class HandSystemRuntime {
     this.session = "camera live";
     this.set("INITIALIZING");
     const { FilesetResolver, HandLandmarker } = await import("@mediapipe/tasks-vision");
+    const generation = ++this.mpGeneration;
     const init = (async () => {
       const fileset = await FilesetResolver.forVisionTasks(WASM);
-      const opts = (delegate: "GPU" | "CPU") => ({ baseOptions: { modelAssetPath: MODEL, delegate }, runningMode: "VIDEO" as const, numHands: 2, minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5 });
+      const opts = (delegate: "GPU" | "CPU") => ({
+        baseOptions: { modelAssetPath: MODEL, delegate },
+        // LIVE_STREAM is critical on phones: detectAsync() accepts frames and
+        // returns immediately; results arrive through resultCallback instead
+        // of blocking the render/camera thread with detectForVideo().
+        runningMode: "LIVE_STREAM" as const,
+        numHands: 2,
+        minHandDetectionConfidence: 0.5,
+        minHandPresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+        resultCallback: (res: any) => {
+          if (generation !== this.mpGeneration || !this.stream) return;
+          this.consumeMediaPipeResult(res, this.video);
+        },
+      });
       try { return await HandLandmarker.createFromOptions(fileset, opts("GPU")); }
       catch { this.session = "camera live · CPU delegate"; return await HandLandmarker.createFromOptions(fileset, opts("CPU")); }
     })();
@@ -279,6 +295,7 @@ export class HandSystemRuntime {
   }
 
   private async teardown() {
+    this.mpGeneration++;
     const s = this.xrSession; this.xrSession = null;
     if (s) { try { await s.end(); } catch { /* already ended */ } }
     const keepExternalVideo = this.externalStream;
@@ -394,41 +411,60 @@ export class HandSystemRuntime {
   private sampleMediaPipe(now: number, out: Partial<Record<Side, THREE.Vector3[]>>) {
     const lm = this.landmarker, v = this.video;
     if (!lm || v.readyState < 2) return;
-    // Do not call MediaPipe synchronously on every WebGL frame. The previous
-    // implementation could execute 30–60 detector calls/sec on a phone,
-    // blocking the main thread and making the AR camera appear to freeze.
+
+    // Keep the render loop independent from MediaPipe. The detector runs in
+    // LIVE_STREAM mode and invokes consumeMediaPipeResult asynchronously.
+    // We only submit a fresh camera frame at a bounded rate; detectAsync()
+    // itself returns immediately and MediaPipe may drop frames under load.
     if (v.currentTime !== this.lastVideoTime && now - this.lastMpDetectT >= MP_INTERVAL_MS) {
       this.lastVideoTime = v.currentTime;
       this.lastMpDetectT = now;
       try {
-        const res = lm.detectForVideo(v, now);
-        const W = window.innerWidth, H = window.innerHeight;
-        const vw = v.videoWidth || 640, vh = v.videoHeight || 480;
-        const sc = Math.max(W / vw, H / vh);
-        const ox = (vw * sc - W) / 2, oy = (vh * sc - H) / 2;
-        const mirrored = !this.isRearCamera();
-        const next: Partial<Record<Side, ScreenLandmark[]>> = {};
-        res.landmarks?.forEach((hand, i) => {
-          const label = res.handedness?.[i]?.[0]?.categoryName?.toLowerCase();
-          // MediaPipe labels assume a mirrored (selfie) image; flip for the unmirrored rear camera
-          let side: Side = label === "left" ? "left" : "right";
-          if (!mirrored) side = side === "left" ? "right" : "left";
-          if (next[side]) side = side === "left" ? "right" : "left";
-          next[side] = hand.map((p) => ({ x: (mirrored ? 1 - p.x : p.x) * vw * sc - ox, y: p.y * vh * sc - oy, z: p.z }));
-        });
-        this.mpFrame = next;
-      } catch { /* transient detector error, skip frame */ }
+        (lm as any).detectAsync(v, now);
+      } catch {
+        // A transient detector error must never stop the AR render loop.
+      }
     }
-    const W = window.innerWidth, H = window.innerHeight;
-    const imgW = (v.videoWidth || 640) * Math.max(W / (v.videoWidth || 640), H / (v.videoHeight || 480));
+
     for (const side of ["left", "right"] as Side[]) {
       const pts = this.mpFrame[side];
       if (!pts) continue;
       const h = this.hands[side];
+      const W = window.innerWidth, H = window.innerHeight;
+      const vw = v.videoWidth || 640, vh = v.videoHeight || 480;
+      const sc = Math.max(W / vw, H / vh);
+      const imgW = vw * sc;
       const lifted = liftLandmarks(pts, this.camera, W, H, h.depth, imgW);
       h.depth = lifted.depth;
       out[side] = lifted.points;
     }
+  }
+
+  private consumeMediaPipeResult(res: any, v: HTMLVideoElement) {
+    const W = window.innerWidth, H = window.innerHeight;
+    const vw = v.videoWidth || 640, vh = v.videoHeight || 480;
+    const sc = Math.max(W / vw, H / vh);
+    const ox = (vw * sc - W) / 2, oy = (vh * sc - H) / 2;
+    const mirrored = !this.isRearCamera();
+    const next: Partial<Record<Side, ScreenLandmark[]>> = {};
+
+    res?.landmarks?.forEach((hand: Array<{ x: number; y: number; z: number }>, i: number) => {
+      const label = res?.handedness?.[i]?.[0]?.categoryName?.toLowerCase();
+      let side: Side = label === "left" ? "left" : "right";
+      if (!mirrored) side = side === "left" ? "right" : "left";
+      if (next[side]) side = side === "left" ? "right" : "left";
+      next[side] = hand.map((p) => ({
+        x: (mirrored ? 1 - p.x : p.x) * vw * sc - ox,
+        y: p.y * vh * sc - oy,
+        z: p.z,
+      }));
+    });
+
+    // An empty detector result means "no hand in this frame"; it should not
+    // freeze the camera or clear the last sample before processHand's normal
+    // lost/reacquire grace period can run.
+    if (Object.keys(next).length) this.mpFrame = next;
+    else this.mpFrame = {};
   }
 
   private isRearCamera(): boolean {
