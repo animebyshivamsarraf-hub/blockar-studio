@@ -26,6 +26,39 @@ export interface HandDiagnostics {
   labels: { side: Side; x: number; y: number; text: string }[];
 }
 
+/**
+ * Strict rear-camera validation. Accept only a confirmed environment camera.
+ * Never treats an unlabeled/unknown camera as rear.
+ */
+export async function isEnvironmentStream(s: MediaStream): Promise<boolean> {
+  const t = s.getVideoTracks()[0];
+  if (!t || t.readyState !== "live") return false;
+  const settings = t.getSettings?.() ?? {};
+  if (settings.facingMode) return settings.facingMode === "environment";
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const dev = devices.find((d) => d.kind === "videoinput" && d.deviceId === settings.deviceId);
+    return !!dev?.label && /back|rear|environment/i.test(dev.label);
+  } catch {
+    return false;
+  }
+}
+
+export function resolveCursorOwner(
+  current: Side | null,
+  hands: Record<Side, { pinch: { held: boolean }; status: TrackStatus }>,
+  cubeOwner: Side | null,
+): Side | null {
+  if (current) {
+    const o = hands[current];
+    if (o.pinch.held && o.status !== "lost" && o.status !== "not detected") return current;
+  }
+  const cands = (["left", "right"] as Side[]).filter(
+    (s) => hands[s].pinch.held && hands[s].status === "tracking" && cubeOwner !== s,
+  );
+  return cands.includes("right") ? "right" : cands[0] ?? null;
+}
+
 const LOST_GRACE_MS = 180;
 const REACQUIRE_FRAMES = 2;
 const CUBE_SIZE = 0.08;
@@ -68,8 +101,13 @@ export class HandSystemRuntime {
   private externalStream = false;
   private xrStartT = 0;
   private xrFallbackPending = false;
-  /** screen-space pinch cursor per hand (only when not grabbing the test cube) */
+  /** screen-space pinch cursor per hand (XR fallback path) */
   onPinchCursor: ((side: Side, x: number, y: number, held: boolean, point3D?: THREE.Vector3) => void) | null = null;
+  /** Lifted MediaPipe pinch point, already in world space. */
+  onPinchWorld: ((side: Side, world: THREE.Vector3, held: boolean) => void) | null = null;
+  private cursorOwner: Side | null = null;
+  /** Fired once when the active construction hand is lost beyond grace. */
+  onOwnerLost: (() => void) | null = null;
   private mouse = { x: 0, y: 0, down: false, pinch: 0, inside: false };
 
   private fps = 0;
@@ -199,6 +237,11 @@ export class HandSystemRuntime {
       const name = e instanceof Error ? e.name : "";
       throw new Error(name === "NotAllowedError" ? "Camera permission denied — allow camera access in browser settings" : name === "NotFoundError" ? "No camera found on this device" : `Camera failed: ${e instanceof Error ? e.message : e}`);
     }
+    // Strict rear-camera check: never silently accept a front/unknown camera.
+    if (!(await isEnvironmentStream(s))) {
+      if (!this.externalStream) s.getTracks().forEach((t) => t.stop());
+      throw new Error("Rear camera required — the opened camera is not the environment camera. BlockAR never uses the front camera.");
+    }
     this.stream = s;
     this.video.srcObject = s;
     await this.video.play().catch(() => {});
@@ -303,6 +346,9 @@ export class HandSystemRuntime {
     const cam = this.renderer.xr.isPresenting ? this.renderer.xr.getCamera() : this.camera;
     for (const side of ["left", "right"] as Side[]) this.processHand(this.hands[side], samples[side] ?? null, now, cam);
 
+    // Only one hand may feed construction. Same-frame pinch ties go to right.
+    this.cursorOwner = resolveCursorOwner(this.cursorOwner, this.hands, this.owner);
+
     // cube hover feedback
     const near = (["left", "right"] as Side[]).some((s) => this.hands[s].status === "tracking" && this.isNearCube(this.hands[s], cam));
     this.cubeMat.emissive.setHex(this.owner ? 0x5a1040 : near ? 0x0c3550 : 0x000000);
@@ -398,6 +444,7 @@ export class HandSystemRuntime {
           h.ring.visible = false;
           if (owns) { this.grab.freeze(); this.gesture = `${h.side} lost — cube frozen`; }
           else h.pinch.reset();
+          if (this.cursorOwner === h.side) this.onOwnerLost?.();
         }
       }
       return;
@@ -450,15 +497,21 @@ export class HandSystemRuntime {
       h.ring.scale.setScalar(phase === "PINCHING" ? 1.4 : grabbing ? 1.15 : 1);
     }
     h.skeleton.setColor(this.owner === h.side ? 0x7dffb0 : HAND_COLORS[h.side]);
-    if (this.onPinchCursor && this.owner !== h.side) {
-      const sp = h.pinchPoint.clone().project(cam);
-      this.onPinchCursor(
-        h.side,
-        (sp.x + 1) / 2 * window.innerWidth,
-        (1 - sp.y) / 2 * window.innerHeight,
-        h.pinch.held,
-        h.pinchPoint.clone(),
-      );
+
+    const active: Side | null = this.cursorOwner
+      ?? (this.hands.right.status === "tracking" ? "right" : this.hands.left.status === "tracking" ? "left" : null);
+    if (this.owner !== h.side && active === h.side) {
+      this.onPinchWorld?.(h.side, h.pinchPoint.clone(), h.pinch.held);
+      if (this.onPinchCursor) {
+        const sp = h.pinchPoint.clone().project(cam);
+        this.onPinchCursor(
+          h.side,
+          (sp.x + 1) / 2 * window.innerWidth,
+          (1 - sp.y) / 2 * window.innerHeight,
+          h.pinch.held,
+          h.pinchPoint.clone(),
+        );
+      }
     }
   }
 
