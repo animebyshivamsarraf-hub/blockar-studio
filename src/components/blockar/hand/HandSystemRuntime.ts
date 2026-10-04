@@ -489,12 +489,11 @@ export class HandSystemRuntime {
 
   private sampleMediaPipe(now: number, out: Partial<Record<Side, THREE.Vector3[]>>) {
     const lm = this.landmarker, v = this.video;
-    if (!lm || v.readyState < 2) return;
+    if ((!lm && !this.handWorker) || v.readyState < 2) return;
 
-    // Keep the render loop independent from MediaPipe. The detector runs in
-    // LIVE_STREAM mode and invokes consumeMediaPipeResult asynchronously.
-    // We only submit a fresh camera frame at a bounded rate; detectAsync()
-    // itself returns immediately and MediaPipe may drop frames under load.
+    // Keep the render loop independent from MediaPipe. Desktop uses LIVE_STREAM
+    // detectAsync(); phones use the isolated worker and VIDEO inference there.
+    // Neither path performs inference synchronously on the main render thread.
     if (v.currentTime !== this.lastVideoTime && now - this.lastMpDetectT >= this.mpIntervalMs) {
       this.lastVideoTime = v.currentTime;
       this.lastMpDetectT = now;
