@@ -59,8 +59,8 @@ export function resolveCursorOwner(
   return cands.includes("right") ? "right" : cands[0] ?? null;
 }
 
-const LOST_GRACE_MS = 180;
-const REACQUIRE_FRAMES = 2;
+const LOST_GRACE_MS = 500;
+const REACQUIRE_FRAMES = 3;
 const CUBE_SIZE = 0.08;
 // Phone AR must keep the camera/render loop responsive. MediaPipe's
 // detectForVideo() is synchronous, so running it on every render frame can
@@ -110,6 +110,8 @@ export class HandSystemRuntime {
   private mpIntervalMs = MP_INTERVAL_MS;
   private lastHandRenderT = 0;
   private lastWorkerSubmitT = 0;
+  private workerRestarting = false;
+  private static readonly WORKER_INFERENCE_TIMEOUT_MS = 4000;
   private mpFrame: Partial<Record<Side, ScreenLandmark[]>> = {};
   private mpGeneration = 0;
   private xrSession: XRSession | null = null;
@@ -312,6 +314,7 @@ export class HandSystemRuntime {
     this.handWorker = new Worker(new URL("./hand-landmarker.worker.ts", import.meta.url), { type: "module" });
     this.workerReady = false;
     this.workerBusy = false;
+    this.workerRestarting = false;
     this.lastWorkerSubmitT = 0;
 
     const ready = new Promise<void>((resolve, reject) => {
@@ -323,11 +326,16 @@ export class HandSystemRuntime {
         if (data.type === "READY") {
           window.clearTimeout(timer);
           this.workerReady = true;
-          this.session = "camera live · MediaPipe worker";
+          this.session = data.delegate === "CPU" ? "camera live · MediaPipe worker · CPU fallback" : "camera live · MediaPipe worker · GPU";
           resolve();
         } else if (data.type === "RESULT") {
           this.workerBusy = false;
           this.consumeMediaPipeResult(data.result, this.video);
+        } else if (data.type === "RUNTIME_FALLBACK") {
+          this.workerBusy = false;
+          this.mpIntervalMs = MP_INTERVAL_CPU_MS;
+          this.error = null;
+          this.session = "camera live · MediaPipe worker · CPU fallback";
         } else if (data.type === "DETECT_ERROR") {
           this.workerBusy = false;
           this.error = data.error ?? "MediaPipe worker detection failed";
@@ -338,7 +346,29 @@ export class HandSystemRuntime {
       };
       worker.onerror = (event) => {
         window.clearTimeout(timer);
-        reject(new Error(event.message || "MediaPipe worker crashed"));
+        if (generation !== this.mpGeneration) return;
+        const message = event.message || "MediaPipe worker crashed";
+        if (this.workerReady && this.backend === "MEDIAPIPE" && !this.workerRestarting) {
+          this.workerRestarting = true;
+          this.workerReady = false;
+          this.workerBusy = false;
+          this.handWorker = null;
+          try { worker.terminate(); } catch { /* already stopped */ }
+          this.session = "RESTARTING · MediaPipe worker";
+          this.error = null;
+          void this.startMediaPipeWorker(generation).then(() => {
+            if (generation !== this.mpGeneration || this.backend !== "MEDIAPIPE") return;
+            this.workerRestarting = false;
+            this.session = "camera live · MediaPipe worker · recovered";
+          }).catch((e: unknown) => {
+            if (generation !== this.mpGeneration || this.backend !== "MEDIAPIPE") return;
+            this.workerRestarting = false;
+            this.error = e instanceof Error ? e.message : String(e);
+            this.session = "RESTARTING · MediaPipe worker failed";
+          });
+          return;
+        }
+        reject(new Error(message));
       };
     });
 
@@ -376,6 +406,7 @@ export class HandSystemRuntime {
     }
     this.workerReady = false;
     this.workerBusy = false;
+    this.workerRestarting = false;
     this.mpFrame = {};
     this.lastVideoTime = -1;
     this.lastMpDetectT = 0;
@@ -438,6 +469,7 @@ export class HandSystemRuntime {
 
     const samples: Partial<Record<Side, THREE.Vector3[]>> = {};
     if (this.system === "TRACKING") {
+      this.checkWorkerWatchdog(now);
       if (this.backend === "WEBXR" && xrFrame) this.sampleXR(xrFrame, samples);
       else if (this.backend === "MEDIAPIPE") this.sampleMediaPipe(now, samples);
       else if (this.backend === "DEMO") this.sampleDemo(samples);
@@ -485,6 +517,32 @@ export class HandSystemRuntime {
     // No native hand joints (e.g. phone Chrome): keep the XR session alive —
     // ending it would destroy room tracking. Report limited mode instead.
     if (!n) this.session = "XR session active · LIMITED: no native 3D hand joints on this device";
+  }
+
+  private checkWorkerWatchdog(now: number) {
+    if (this.backend !== "MEDIAPIPE" || !this.handWorker || this.workerRestarting) return;
+    if (!this.workerBusy || !this.lastWorkerSubmitT) return;
+    if (now - this.lastWorkerSubmitT < HandSystemRuntime.WORKER_INFERENCE_TIMEOUT_MS) return;
+
+    this.workerRestarting = true;
+    this.workerBusy = false;
+    this.workerReady = false;
+    this.session = "RESTARTING · MediaPipe worker";
+    this.error = null;
+    try { this.handWorker.terminate(); } catch { /* already stopped */ }
+    this.handWorker = null;
+
+    const generation = this.mpGeneration;
+    void this.startMediaPipeWorker(generation).then(() => {
+      if (generation !== this.mpGeneration || this.backend !== "MEDIAPIPE") return;
+      this.workerRestarting = false;
+      this.session = "camera live · MediaPipe worker · recovered";
+    }).catch((e: unknown) => {
+      if (generation !== this.mpGeneration || this.backend !== "MEDIAPIPE") return;
+      this.workerRestarting = false;
+      this.error = e instanceof Error ? e.message : String(e);
+      this.session = "RESTARTING · MediaPipe worker failed";
+    });
   }
 
   private sampleMediaPipe(now: number, out: Partial<Record<Side, THREE.Vector3[]>>) {
