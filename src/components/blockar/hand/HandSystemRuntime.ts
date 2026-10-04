@@ -67,6 +67,8 @@ const CUBE_SIZE = 0.08;
 // stall Chrome on mid-range phones. Hand tracking remains responsive at a
 // bounded 15 FPS while the camera and 3D scene continue rendering normally.
 const MP_INTERVAL_MS = 1000 / 15;
+const MP_INTERVAL_CPU_MS = 1000 / 10;
+const HAND_RENDER_INTERVAL_MS = 1000 / 30;
 const HAND_COLORS: Record<Side, number> = { left: 0x7fb8ff, right: 0x4de8ff };
 
 interface HandState {
@@ -102,6 +104,8 @@ export class HandSystemRuntime {
   private landmarker: HandLandmarker | null = null;
   private lastVideoTime = -1;
   private lastMpDetectT = 0;
+  private mpIntervalMs = MP_INTERVAL_MS;
+  private lastHandRenderT = 0;
   private mpFrame: Partial<Record<Side, ScreenLandmark[]>> = {};
   private mpGeneration = 0;
   private xrSession: XRSession | null = null;
@@ -267,7 +271,9 @@ export class HandSystemRuntime {
         // returns immediately; results arrive through resultCallback instead
         // of blocking the render/camera thread with detectForVideo().
         runningMode: "LIVE_STREAM" as const,
-        numHands: 2,
+        // One construction hand is enough on phones and roughly halves the
+        // landmark workload. Desktop/headset keeps two-hand support.
+        numHands: /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) ? 1 : 2,
         minHandDetectionConfidence: 0.5,
         minHandPresenceConfidence: 0.5,
         minTrackingConfidence: 0.5,
@@ -276,8 +282,16 @@ export class HandSystemRuntime {
           this.consumeMediaPipeResult(res, this.video);
         },
       });
-      try { return await HandLandmarker.createFromOptions(fileset, opts("GPU")); }
-      catch { this.session = "camera live · CPU delegate"; return await HandLandmarker.createFromOptions(fileset, opts("CPU")); }
+      try {
+        this.mpIntervalMs = MP_INTERVAL_MS;
+        return await HandLandmarker.createFromOptions(fileset, opts("GPU"));
+      } catch {
+        // CPU inference is substantially heavier on mid-range phones. Keep it
+        // available for compatibility, but deliberately reduce submission rate.
+        this.mpIntervalMs = MP_INTERVAL_CPU_MS;
+        this.session = "camera live · CPU delegate · reduced rate";
+        return await HandLandmarker.createFromOptions(fileset, opts("CPU"));
+      }
     })();
     const timeout = new Promise<never>((_, r) => setTimeout(() => r(new Error("MediaPipe model load timed out (20s) — check network")), 20000));
     this.landmarker = await Promise.race([init, timeout]);
@@ -310,6 +324,8 @@ export class HandSystemRuntime {
     this.mpFrame = {};
     this.lastVideoTime = -1;
     this.lastMpDetectT = 0;
+    this.mpIntervalMs = MP_INTERVAL_MS;
+    this.lastHandRenderT = 0;
     this.backend = "NONE";
     this.session = "idle";
     if (this.grab.active) this.grab.releaseGrab();
@@ -381,7 +397,14 @@ export class HandSystemRuntime {
     this.cubeMat.emissive.setHex(this.owner ? 0x5a1040 : near ? 0x0c3550 : 0x000000);
     if (!this.owner) this.cube.rotation.y += 0.004;
 
-    this.renderer.render(this.scene, this.camera);
+    // The construction engine owns the main 3D render loop. The hand layer is
+    // an overlay, so rendering it at 30 FPS on phones avoids competing with
+    // the camera and main Three.js renderer every display frame.
+    const shouldRender = this.renderer.xr.isPresenting || now - this.lastHandRenderT >= HAND_RENDER_INTERVAL_MS;
+    if (shouldRender) {
+      this.lastHandRenderT = now;
+      this.renderer.render(this.scene, this.camera);
+    }
     this.emit(false, cam);
   };
 
