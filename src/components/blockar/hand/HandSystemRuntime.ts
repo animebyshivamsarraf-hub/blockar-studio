@@ -346,7 +346,29 @@ export class HandSystemRuntime {
       };
       worker.onerror = (event) => {
         window.clearTimeout(timer);
-        reject(new Error(event.message || "MediaPipe worker crashed"));
+        if (generation !== this.mpGeneration) return;
+        const message = event.message || "MediaPipe worker crashed";
+        if (this.workerReady && this.backend === "MEDIAPIPE" && !this.workerRestarting) {
+          this.workerRestarting = true;
+          this.workerReady = false;
+          this.workerBusy = false;
+          this.handWorker = null;
+          try { worker.terminate(); } catch { /* already stopped */ }
+          this.session = "RESTARTING · MediaPipe worker";
+          this.error = null;
+          void this.startMediaPipeWorker(generation).then(() => {
+            if (generation !== this.mpGeneration || this.backend !== "MEDIAPIPE") return;
+            this.workerRestarting = false;
+            this.session = "camera live · MediaPipe worker · recovered";
+          }).catch((e: unknown) => {
+            if (generation !== this.mpGeneration || this.backend !== "MEDIAPIPE") return;
+            this.workerRestarting = false;
+            this.error = e instanceof Error ? e.message : String(e);
+            this.session = "RESTARTING · MediaPipe worker failed";
+          });
+          return;
+        }
+        reject(new Error(message));
       };
     });
 
