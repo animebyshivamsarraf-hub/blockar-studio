@@ -366,7 +366,7 @@ export function createEngine(o: EngineOpts) {
     }
   }
 
-  function nearestBlock(local: THREE.Vector3, radius = VOXEL * 1.5): string | null {
+  function nearestBlock(local: THREE.Vector3, radius = VOXEL * 1.8): string | null {
     let best: string | null = null;
     let bestD = radius;
     for (const [key, c] of cells) {
@@ -524,19 +524,25 @@ export function createEngine(o: EngineOpts) {
           const grabKeys = grabController.keys;
           const base = cells.get(grabKeys[0]!);
           if (base) {
-            const q = snapLocal(target);
-            const dx = q.x - base.x, dy = q.y - base.y, dz = q.z - base.z;
-            const set = new Set(grabKeys);
-            const moved = grabKeys.map(key => {
+            // During an active grab, keep the visual object at the exact hand
+            // delta. Do NOT snap every frame: voxel snapping here caused
+            // jitter, micro-teleports and made the hand feel disconnected.
+            // Cell coordinates remain unchanged until release, when the final
+            // position is snapped exactly once.
+            const baseCenter = new THREE.Vector3(
+              base.x * VOXEL,
+              base.y * VOXEL + VOXEL / 2,
+              base.z * VOXEL,
+            );
+            const delta = target.clone().sub(baseCenter);
+            for (const key of grabKeys) {
               const c = cells.get(key)!;
-              return { ...c, x: c.x + dx, y: Math.max(0, c.y + dy), z: c.z + dz };
-            });
-            const blocked = moved.some(c => { const nk = k(c.x, c.y, c.z); return cells.has(nk) && !set.has(nk); });
-            if (!blocked) {
-              for (const key of grabKeys) {
-                const c = cells.get(key)!; const m = meshes.get(key)!;
-                m.position.set((c.x + dx) * VOXEL, (c.y + dy) * VOXEL + VOXEL / 2, (c.z + dz) * VOXEL);
-              }
+              const m = meshes.get(key)!;
+              m.position.set(
+                c.x * VOXEL + delta.x,
+                c.y * VOXEL + VOXEL / 2 + delta.y,
+                c.z * VOXEL + delta.z,
+              );
             }
           }
         }
@@ -552,6 +558,8 @@ export function createEngine(o: EngineOpts) {
         if (keys.length && target) {
           const base = cells.get(keys[0]!);
           if (base) {
+            // Snap only once, on release. This keeps the grid contract while
+            // preserving smooth hand-following during the grab.
             const q = snapLocal(target);
             const dx = q.x - base.x, dy = q.y - base.y, dz = q.z - base.z;
             const set = new Set(keys);
@@ -566,6 +574,16 @@ export function createEngine(o: EngineOpts) {
               apply(removes, "next");
               apply(adds, "next");
               commit([...removes, ...adds]);
+            } else {
+              // Restore the exact logical positions when release is blocked or
+              // the final snapped delta is zero. setCell rebuilds the meshes
+              // from canonical cell coordinates and removes any sub-voxel
+              // preview offset from the active grab.
+              for (const key of keys) {
+                const c = cells.get(key);
+                if (c) setCell(key, c);
+              }
+              if (blocked) o.onHint("Can't drop there — space is occupied");
             }
           }
         }
