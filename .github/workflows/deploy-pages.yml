@@ -2,7 +2,7 @@ name: Deploy BlockAR to GitHub Pages
 
 on:
   push:
-    branches: [main, fix/mobile-hand-runtime-recovery]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
