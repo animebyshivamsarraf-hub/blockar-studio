@@ -102,10 +102,14 @@ export class HandSystemRuntime {
 
   private stream: MediaStream | null = null;
   private landmarker: HandLandmarker | null = null;
+  private handWorker: Worker | null = null;
+  private workerReady = false;
+  private workerBusy = false;
   private lastVideoTime = -1;
   private lastMpDetectT = 0;
   private mpIntervalMs = MP_INTERVAL_MS;
   private lastHandRenderT = 0;
+  private lastWorkerSubmitT = 0;
   private mpFrame: Partial<Record<Side, ScreenLandmark[]>> = {};
   private mpGeneration = 0;
   private xrSession: XRSession | null = null;
@@ -261,19 +265,26 @@ export class HandSystemRuntime {
     await this.video.play().catch(() => {});
     this.session = "camera live";
     this.set("INITIALIZING");
-    const { FilesetResolver, HandLandmarker } = await import("@mediapipe/tasks-vision");
+    const isPhone = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
     const generation = ++this.mpGeneration;
+
+    // Official MediaPipe web samples isolate vision inference in a Worker.
+    // On phones this keeps WASM/GPU inference away from the camera + Three.js
+    // main thread, which is the important difference from detectAsync alone.
+    if (isPhone) {
+      this.mpIntervalMs = MP_INTERVAL_CPU_MS;
+      await this.startMediaPipeWorker(generation);
+      this.resetCube();
+      return;
+    }
+
+    const { FilesetResolver, HandLandmarker } = await import("@mediapipe/tasks-vision");
     const init = (async () => {
       const fileset = await FilesetResolver.forVisionTasks(WASM);
       const opts = (delegate: "GPU" | "CPU") => ({
         baseOptions: { modelAssetPath: MODEL, delegate },
-        // LIVE_STREAM is critical on phones: detectAsync() accepts frames and
-        // returns immediately; results arrive through resultCallback instead
-        // of blocking the render/camera thread with detectForVideo().
         runningMode: "LIVE_STREAM" as const,
-        // One construction hand is enough on phones and roughly halves the
-        // landmark workload. Desktop/headset keeps two-hand support.
-        numHands: /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) ? 1 : 2,
+        numHands: 2,
         minHandDetectionConfidence: 0.5,
         minHandPresenceConfidence: 0.5,
         minTrackingConfidence: 0.5,
@@ -286,8 +297,6 @@ export class HandSystemRuntime {
         this.mpIntervalMs = MP_INTERVAL_MS;
         return await HandLandmarker.createFromOptions(fileset, opts("GPU"));
       } catch {
-        // CPU inference is substantially heavier on mid-range phones. Keep it
-        // available for compatibility, but deliberately reduce submission rate.
         this.mpIntervalMs = MP_INTERVAL_CPU_MS;
         this.session = "camera live · CPU delegate · reduced rate";
         return await HandLandmarker.createFromOptions(fileset, opts("CPU"));
@@ -296,6 +305,45 @@ export class HandSystemRuntime {
     const timeout = new Promise<never>((_, r) => setTimeout(() => r(new Error("MediaPipe model load timed out (20s) — check network")), 20000));
     this.landmarker = await Promise.race([init, timeout]);
     this.resetCube();
+  }
+
+  private async startMediaPipeWorker(generation: number) {
+    this.handWorker?.terminate();
+    this.handWorker = new Worker(new URL("./hand-landmarker.worker.ts", import.meta.url), { type: "module" });
+    this.workerReady = false;
+    this.workerBusy = false;
+    this.lastWorkerSubmitT = 0;
+
+    const ready = new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(() => reject(new Error("MediaPipe worker timed out (20s) — check network")), 20000);
+      const worker = this.handWorker!;
+      worker.onmessage = (event: MessageEvent) => {
+        const data = event.data ?? {};
+        if (generation !== this.mpGeneration) return;
+        if (data.type === "READY") {
+          window.clearTimeout(timer);
+          this.workerReady = true;
+          this.session = "camera live · MediaPipe worker";
+          resolve();
+        } else if (data.type === "RESULT") {
+          this.workerBusy = false;
+          this.consumeMediaPipeResult(data.result, this.video);
+        } else if (data.type === "DETECT_ERROR") {
+          this.workerBusy = false;
+          this.error = data.error ?? "MediaPipe worker detection failed";
+        } else if (data.type === "ERROR") {
+          window.clearTimeout(timer);
+          reject(new Error(data.error ?? "MediaPipe worker failed"));
+        }
+      };
+      worker.onerror = (event) => {
+        window.clearTimeout(timer);
+        reject(new Error(event.message || "MediaPipe worker crashed"));
+      };
+    });
+
+    this.handWorker.postMessage({ type: "INIT" });
+    await ready;
   }
 
   private startDemo() {
@@ -321,9 +369,17 @@ export class HandSystemRuntime {
     if (!keepExternalVideo) this.video.srcObject = null;
     try { this.landmarker?.close(); } catch { /* ignore */ }
     this.landmarker = null;
+    if (this.handWorker) {
+      try { this.handWorker.postMessage({ type: "STOP" }); } catch { /* ignore */ }
+      this.handWorker.terminate();
+      this.handWorker = null;
+    }
+    this.workerReady = false;
+    this.workerBusy = false;
     this.mpFrame = {};
     this.lastVideoTime = -1;
     this.lastMpDetectT = 0;
+    this.lastWorkerSubmitT = 0;
     this.mpIntervalMs = MP_INTERVAL_MS;
     this.lastHandRenderT = 0;
     this.backend = "NONE";
@@ -439,13 +495,43 @@ export class HandSystemRuntime {
     // LIVE_STREAM mode and invokes consumeMediaPipeResult asynchronously.
     // We only submit a fresh camera frame at a bounded rate; detectAsync()
     // itself returns immediately and MediaPipe may drop frames under load.
-    if (v.currentTime !== this.lastVideoTime && now - this.lastMpDetectT >= MP_INTERVAL_MS) {
+    if (v.currentTime !== this.lastVideoTime && now - this.lastMpDetectT >= this.mpIntervalMs) {
       this.lastVideoTime = v.currentTime;
       this.lastMpDetectT = now;
-      try {
-        (lm as any).detectAsync(v, now);
-      } catch {
-        // A transient detector error must never stop the AR render loop.
+
+      if (this.handWorker) {
+        if (!this.workerReady || this.workerBusy) return;
+        this.lastWorkerSubmitT = now;
+        this.workerBusy = true;
+        void createImageBitmap(v, {
+          resizeWidth: 480,
+          resizeHeight: 270,
+          resizeQuality: "low",
+        }).then((bitmap) => {
+          if (!this.handWorker || !this.workerReady) {
+            bitmap.close();
+            this.workerBusy = false;
+            return;
+          }
+          try {
+            this.handWorker.postMessage({
+              type: "FRAME",
+              bitmap,
+              timestampMs: Math.max(1, Math.round(now)),
+            }, [bitmap]);
+          } catch {
+            bitmap.close();
+            this.workerBusy = false;
+          }
+        }).catch(() => {
+          this.workerBusy = false;
+        });
+      } else {
+        try {
+          (lm as any).detectAsync(v, now);
+        } catch {
+          // A transient detector error must never stop the AR render loop.
+        }
       }
     }
 
