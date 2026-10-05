@@ -5,8 +5,11 @@ export interface CapabilityReport {
   webxrSupported: boolean;
   immersiveArSupported: boolean;
   handTrackingSupported: boolean;
+  hitTestSupported: boolean;
+  planeDetectionSupported: boolean;
   /** Tri-state: confirmed rear camera, no camera, or unknown/unlabeled. */
   rearCameraAvailable: "yes" | "no" | "unknown";
+  nonArFallbackReason?: string;
   details: string[];
 }
 
@@ -16,6 +19,8 @@ export interface DeviceTelemetryLog {
     | "webxr_available"
     | "immersive_ar_available"
     | "hand_tracking_available"
+    | "hit_test_available"
+    | "plane_detection_available"
     | "left_hand_detected"
     | "right_hand_detected"
     | "pinch_detected"
@@ -60,13 +65,13 @@ export const deviceTelemetry = new TelemetryCollector();
 /**
  * Clean capability check before selecting the interaction backend.
  * Selection Priority:
- * A. WebXR immersive-ar + hand tracking
- * B. WebXR AR without hand tracking (safe reticle touch fallback)
- * C. Rear-camera fallback with MediaPipe where supported
+ * A. WebXR immersive-ar + hand tracking (headset/full spatial MR)
+ * B. WebXR AR without hand tracking (reticle hit-test touch building)
+ * C. Non-AR fallback: Rear-camera optical tracking with MediaPipe
  * D. Clear unsupported-state UI
  *
  * Strict policy: Never silently switch to the front camera.
- * Strict policy: Never use a fake virtual floor as a replacement for real world tracking.
+ * Strict policy: Clear distinction between room-scale WebXR AR and non-AR optical camera fallback.
  */
 export async function detectDeviceCapabilities(): Promise<CapabilityReport> {
   const details: string[] = [];
@@ -75,6 +80,8 @@ export async function detectDeviceCapabilities(): Promise<CapabilityReport> {
   let webxrSupported = false;
   let immersiveArSupported = false;
   let handTrackingSupported = false;
+  let hitTestSupported = false;
+  let planeDetectionSupported = false;
   let rearCameraAvailable: "yes" | "no" | "unknown" = "unknown";
 
   if (xr) {
@@ -85,12 +92,43 @@ export async function detectDeviceCapabilities(): Promise<CapabilityReport> {
       if (immersiveArSupported) {
         deviceTelemetry.log("immersive_ar_available");
         details.push("WebXR immersive-ar supported");
+
+        // 1. Hand Tracking check
         if (typeof window !== "undefined" && ("XRHand" in window || "XRHandSpace" in window)) {
           handTrackingSupported = true;
           deviceTelemetry.log("hand_tracking_available");
           details.push("WebXR Hand Tracking API detected");
         } else {
           details.push("WebXR hand tracking not natively exposed in window globals");
+        }
+
+        // 2. Hit-testing check
+        if (
+          typeof window !== "undefined" &&
+          ("XRHitTestSource" in window ||
+            (typeof (window as any).XRSession !== "undefined" &&
+              "requestHitTestSource" in (window as any).XRSession.prototype))
+        ) {
+          hitTestSupported = true;
+          deviceTelemetry.log("hit_test_available");
+          details.push("WebXR Hit-Test API available");
+        } else {
+          details.push("WebXR Hit-Test API not detected");
+        }
+
+        // 3. Plane detection check
+        if (
+          typeof window !== "undefined" &&
+          ("XRPlane" in window ||
+            "XRPlaneSet" in window ||
+            (typeof (window as any).XRFrame !== "undefined" &&
+              "detectedPlanes" in (window as any).XRFrame.prototype))
+        ) {
+          planeDetectionSupported = true;
+          deviceTelemetry.log("plane_detection_available");
+          details.push("WebXR Plane Detection API available");
+        } else {
+          details.push("WebXR Plane Detection API not detected");
         }
       } else {
         details.push("immersive-ar session not supported by this browser");
@@ -102,7 +140,7 @@ export async function detectDeviceCapabilities(): Promise<CapabilityReport> {
     details.push("WebXR API (navigator.xr) not present");
   }
 
-  // Check rear camera strictly (exact environment or environment)
+  // Check rear camera strictly (environment facingMode)
   if (typeof navigator !== "undefined" && navigator.mediaDevices?.enumerateDevices) {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
@@ -124,13 +162,26 @@ export async function detectDeviceCapabilities(): Promise<CapabilityReport> {
   }
 
   let backend: DeviceBackend = "unsupported";
-  if (immersiveArSupported) {
+  let nonArFallbackReason: string | undefined;
+
+  if (immersiveArSupported && hitTestSupported) {
     backend = handTrackingSupported ? "webxr-hand" : "webxr-ar";
+  } else if (immersiveArSupported) {
+    // Immersive-AR is supported but hit-testing is absent
+    backend = "fallback-rear";
+    nonArFallbackReason = "WebXR immersive-ar supported, but spatial hit-testing is unavailable. Using optical camera fallback.";
+    details.push(nonArFallbackReason);
+    deviceTelemetry.log("fallback_selected", { mode: "rear_camera_mediapipe", reason: "missing_hit_test" });
   } else if (rearCameraAvailable !== "no" || (typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia)) {
     backend = "fallback-rear";
-    deviceTelemetry.log("fallback_selected", { mode: "rear_camera_mediapipe" });
+    nonArFallbackReason = !webxrSupported
+      ? "WebXR API not available in browser. Optical rear-camera fallback active."
+      : "WebXR immersive-ar not supported on device. Optical rear-camera fallback active.";
+    details.push(nonArFallbackReason);
+    deviceTelemetry.log("fallback_selected", { mode: "rear_camera_mediapipe", reason: "no_immersive_ar" });
   } else {
     backend = "unsupported";
+    nonArFallbackReason = "Neither WebXR immersive-ar nor camera access is available.";
   }
 
   return {
@@ -138,7 +189,10 @@ export async function detectDeviceCapabilities(): Promise<CapabilityReport> {
     webxrSupported,
     immersiveArSupported,
     handTrackingSupported,
+    hitTestSupported,
+    planeDetectionSupported,
     rearCameraAvailable,
+    nonArFallbackReason,
     details,
   };
 }

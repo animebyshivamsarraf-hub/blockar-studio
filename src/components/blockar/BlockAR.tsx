@@ -518,8 +518,11 @@ export function BlockAR() {
               </div>
               <div className="mt-1 space-y-0.5">
                 <div>Backend: {capability?.backend || "detecting..."}</div>
-                <div>WebXR: {capability?.webxrSupported ? "YES" : "NO"} | AR: {capability?.immersiveArSupported ? "YES" : "NO"} | Hands: {capability?.handTrackingSupported ? "YES" : "NO"}</div>
+                <div>WebXR: {capability?.webxrSupported ? "YES" : "NO"} | AR: {capability?.immersiveArSupported ? "YES" : "NO"} | Hit-Test: {capability?.hitTestSupported ? "YES" : "NO"} | Planes: {capability?.planeDetectionSupported ? "YES" : "NO"} | Hands: {capability?.handTrackingSupported ? "YES" : "NO"}</div>
                 <div>Rear Camera: {capability ? capability.rearCameraAvailable.toUpperCase() : "detecting..."}</div>
+                {capability?.nonArFallbackReason && (
+                  <div className="text-brand-cyan">Non-AR Fallback: {capability.nonArFallbackReason}</div>
+                )}
                 {capability?.backend === "fallback-rear" && (
                   <div className="text-amber-400">{FALLBACK_LIMITATION}</div>
                 )}

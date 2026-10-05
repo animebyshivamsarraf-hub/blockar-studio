@@ -111,13 +111,15 @@ export class HandSystemRuntime {
   private lastHandRenderT = 0;
   private lastWorkerSubmitT = 0;
   private workerRestarting = false;
-  private static readonly WORKER_INFERENCE_TIMEOUT_MS = 4000;
+  private workerRestartCount = 0;
+  private static readonly MAX_WORKER_RESTARTS = 3;
+  private static readonly WORKER_INFERENCE_TIMEOUT_MS = 3500;
+  private lastSentTimestamp = 0;
   private mpFrame: Partial<Record<Side, ScreenLandmark[]>> = {};
   private mpGeneration = 0;
   private xrSession: XRSession | null = null;
   private externalStream = false;
   private xrStartT = 0;
-  private xrFallbackPending = false;
   /** screen-space pinch cursor per hand (XR fallback path) */
   onPinchCursor: ((side: Side, x: number, y: number, held: boolean, point3D?: THREE.Vector3) => void) | null = null;
   /** Lifted MediaPipe pinch point, already in world space. */
@@ -249,9 +251,9 @@ export class HandSystemRuntime {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera API not available (needs HTTPS)");
       // Rear camera only: do not silently switch to front/unspecified camera.
       try {
-        s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+        s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" }, width: { ideal: 960, max: 960 }, height: { ideal: 540, max: 540 } }, audio: false });
       } catch {
-        s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+        s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 960, max: 960 }, height: { ideal: 540, max: 540 } }, audio: false });
       }
     } catch (e: unknown) {
       const name = e instanceof Error ? e.name : "";
@@ -269,6 +271,7 @@ export class HandSystemRuntime {
     this.set("INITIALIZING");
     const isPhone = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
     const generation = ++this.mpGeneration;
+    this.workerRestartCount = 0;
 
     // Official MediaPipe web samples isolate vision inference in a Worker.
     // On phones this keeps WASM/GPU inference away from the camera + Three.js
@@ -326,6 +329,8 @@ export class HandSystemRuntime {
         if (data.type === "READY") {
           window.clearTimeout(timer);
           this.workerReady = true;
+          this.workerBusy = false;
+          this.workerRestarting = false;
           this.session = data.delegate === "CPU" ? "camera live · MediaPipe worker · CPU fallback" : "camera live · MediaPipe worker · GPU";
           resolve();
         } else if (data.type === "RESULT") {
@@ -349,12 +354,22 @@ export class HandSystemRuntime {
         if (generation !== this.mpGeneration) return;
         const message = event.message || "MediaPipe worker crashed";
         if (this.workerReady && this.backend === "MEDIAPIPE" && !this.workerRestarting) {
+          if (this.workerRestartCount >= HandSystemRuntime.MAX_WORKER_RESTARTS) {
+            this.workerRestarting = false;
+            this.workerReady = false;
+            this.workerBusy = false;
+            this.error = "MediaPipe worker restart limit exceeded. Touch building remains active.";
+            this.session = "MediaPipe worker stopped · restart limit";
+            this.set("ERROR");
+            return;
+          }
+          this.workerRestartCount++;
           this.workerRestarting = true;
           this.workerReady = false;
           this.workerBusy = false;
           this.handWorker = null;
           try { worker.terminate(); } catch { /* already stopped */ }
-          this.session = "RESTARTING · MediaPipe worker";
+          this.session = `RESTARTING · MediaPipe worker (${this.workerRestartCount}/${HandSystemRuntime.MAX_WORKER_RESTARTS})`;
           this.error = null;
           void this.startMediaPipeWorker(generation).then(() => {
             if (generation !== this.mpGeneration || this.backend !== "MEDIAPIPE") return;
@@ -394,8 +409,6 @@ export class HandSystemRuntime {
     if (!keepExternalVideo) this.stream?.getTracks().forEach((t) => t.stop());
     this.externalStream = false;
     this.stream = null;
-    // The BlockAR DOM video owns the shared rear-camera stream. Do not blank it
-    // when hand tracking is stopped/restarted.
     if (!keepExternalVideo) this.video.srcObject = null;
     try { this.landmarker?.close(); } catch { /* ignore */ }
     this.landmarker = null;
@@ -407,10 +420,12 @@ export class HandSystemRuntime {
     this.workerReady = false;
     this.workerBusy = false;
     this.workerRestarting = false;
+    this.workerRestartCount = 0;
     this.mpFrame = {};
     this.lastVideoTime = -1;
     this.lastMpDetectT = 0;
     this.lastWorkerSubmitT = 0;
+    this.lastSentTimestamp = 0;
     this.mpIntervalMs = MP_INTERVAL_MS;
     this.lastHandRenderT = 0;
     this.backend = "NONE";
@@ -485,9 +500,6 @@ export class HandSystemRuntime {
     this.cubeMat.emissive.setHex(this.owner ? 0x5a1040 : near ? 0x0c3550 : 0x000000);
     if (!this.owner) this.cube.rotation.y += 0.004;
 
-    // The construction engine owns the main 3D render loop. The hand layer is
-    // an overlay, so rendering it at 30 FPS on phones avoids competing with
-    // the camera and main Three.js renderer every display frame.
     const shouldRender = this.renderer.xr.isPresenting || now - this.lastHandRenderT >= HAND_RENDER_INTERVAL_MS;
     if (shouldRender) {
       this.lastHandRenderT = now;
@@ -514,8 +526,6 @@ export class HandSystemRuntime {
     }
     const n = Array.from(session.inputSources).filter((s) => s.hand).length;
     this.session = n ? `XR session active · ${n} hand input(s)` : "XR session active · no native hands — switching to MediaPipe…";
-    // No native hand joints (e.g. phone Chrome): keep the XR session alive —
-    // ending it would destroy room tracking. Report limited mode instead.
     if (!n) this.session = "XR session active · LIMITED: no native 3D hand joints on this device";
   }
 
@@ -524,10 +534,19 @@ export class HandSystemRuntime {
     if (!this.workerBusy || !this.lastWorkerSubmitT) return;
     if (now - this.lastWorkerSubmitT < HandSystemRuntime.WORKER_INFERENCE_TIMEOUT_MS) return;
 
+    if (this.workerRestartCount >= HandSystemRuntime.MAX_WORKER_RESTARTS) {
+      this.workerBusy = false;
+      this.error = "Hand tracking worker timed out repeatedly. Touch building remains active.";
+      this.session = "MediaPipe worker stopped · timeout limit";
+      this.set("ERROR");
+      return;
+    }
+
+    this.workerRestartCount++;
     this.workerRestarting = true;
     this.workerBusy = false;
     this.workerReady = false;
-    this.session = "RESTARTING · MediaPipe worker";
+    this.session = `RESTARTING · MediaPipe worker watchdog (${this.workerRestartCount}/${HandSystemRuntime.MAX_WORKER_RESTARTS})`;
     this.error = null;
     try { this.handWorker.terminate(); } catch { /* already stopped */ }
     this.handWorker = null;
@@ -549,9 +568,6 @@ export class HandSystemRuntime {
     const lm = this.landmarker, v = this.video;
     if ((!lm && !this.handWorker) || v.readyState < 2) return;
 
-    // Keep the render loop independent from MediaPipe. Desktop uses LIVE_STREAM
-    // detectAsync(); phones use the isolated worker and VIDEO inference there.
-    // Neither path performs inference synchronously on the main render thread.
     if (v.currentTime !== this.lastVideoTime && now - this.lastMpDetectT >= this.mpIntervalMs) {
       this.lastVideoTime = v.currentTime;
       this.lastMpDetectT = now;
@@ -560,27 +576,42 @@ export class HandSystemRuntime {
         if (!this.workerReady || this.workerBusy) return;
         this.lastWorkerSubmitT = now;
         this.workerBusy = true;
-        void createImageBitmap(v, {
+
+        // Bounded createImageBitmap with safety abort timeout
+        let bitmapResolved = false;
+        const bitmapTimeout = window.setTimeout(() => {
+          if (!bitmapResolved && this.workerBusy) {
+            this.workerBusy = false;
+          }
+        }, 1200);
+
+        createImageBitmap(v, {
           resizeWidth: 480,
           resizeHeight: 270,
           resizeQuality: "low",
         }).then((bitmap) => {
+          bitmapResolved = true;
+          window.clearTimeout(bitmapTimeout);
           if (!this.handWorker || !this.workerReady) {
-            bitmap.close();
+            try { bitmap.close(); } catch {}
             this.workerBusy = false;
             return;
           }
           try {
+            const ts = Math.max(this.lastSentTimestamp + 1, Math.round(now));
+            this.lastSentTimestamp = ts;
             this.handWorker.postMessage({
               type: "FRAME",
               bitmap,
-              timestampMs: Math.max(1, Math.round(now)),
+              timestampMs: ts,
             }, [bitmap]);
           } catch {
-            bitmap.close();
+            try { bitmap.close(); } catch {}
             this.workerBusy = false;
           }
         }).catch(() => {
+          bitmapResolved = true;
+          window.clearTimeout(bitmapTimeout);
           this.workerBusy = false;
         });
       } else {
@@ -626,9 +657,6 @@ export class HandSystemRuntime {
       }));
     });
 
-    // An empty detector result means "no hand in this frame"; it should not
-    // freeze the camera or clear the last sample before processHand's normal
-    // lost/reacquire grace period can run.
     if (Object.keys(next).length) this.mpFrame = next;
     else this.mpFrame = {};
   }
