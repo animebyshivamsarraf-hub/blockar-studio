@@ -413,7 +413,13 @@ export function createEngine(o: EngineOpts) {
   // Shared world-space hand pipeline. `local` is ALWAYS expressed in the
   // construction root's coordinate system (the anchored real-world space),
   // never in screen space and never relative to the camera.
+  //
+  // A pinch stroke is a first-class interaction: in Track mode it feeds the
+  // coaster's continuous stroke builder; in Build mode it extrudes blocks.
+  // This is deliberately independent from the reticle so the user can pinch
+  // wherever the tracked hand is visible and draw from that point.
   let handWasPinching = false;
+  let activeHandStroke: "track" | "build" | null = null;
 
   function processHandSample(local: THREE.Vector3 | null, pinching: boolean) {
     const now = performance.now();
@@ -421,7 +427,7 @@ export function createEngine(o: EngineOpts) {
     if (!local) {
       xrHandSeen = false;
 
-      if (grabController.active && now - (handSeenAt || 0) > XR_HAND_LOST_GRACE_MS) {
+      if ((grabController.active || activeHandStroke) && now - (handSeenAt || 0) > XR_HAND_LOST_GRACE_MS) {
         xrHandFrozen = true;
         grabController.freeze();
         o.onHandStatus?.("frozen");
@@ -451,8 +457,12 @@ export function createEngine(o: EngineOpts) {
       }
       xrHandFrozen = false;
       xrReacquireFrames = 0;
-      grabController.rebase(local);
-      deviceTelemetry.log("hand_reacquired", { point: local.toArray() });
+      if (grabController.active) grabController.rebase(local);
+      if (activeHandStroke === "track") coaster.rebaseStroke(local, now);
+      // Build strokes use the last local pinch point directly; resetting it here
+      // prevents a hand-loss gap from being interpreted as a giant extrusion.
+      xrLastLocal = local.clone();
+      deviceTelemetry.log("hand_reacquired", { point: local.toArray(), stroke: activeHandStroke });
       o.onHint("Hand recovered — rebased");
       return;
     }
@@ -474,14 +484,20 @@ export function createEngine(o: EngineOpts) {
       deviceTelemetry.log("pinch_detected", { point: local.toArray() });
       xrLastLocal = local.clone();
       if (o.getMode() === "track") {
-        const q = snapLocal(local);
-        if (q.y >= 0) coaster.addPoint(q.x, q.y, q.z);
-        o.onHint("Pinch started — move your hand to extend the track");
+        const started = coaster.beginStroke(local, now, false);
+        if (started) {
+          activeHandStroke = "track";
+          o.onHint("PINCH — move your hand to draw the track");
+        } else {
+          activeHandStroke = null;
+          o.onHint("Pinch near the last track point to continue");
+        }
       } else if (o.getMode() === "build") {
         stroke = [];
+        activeHandStroke = "build";
         const q = snapLocal(local);
         if (q.y >= 0) place([q.x, q.y, q.z]);
-        o.onHint("Pinch started — move your hand to build");
+        o.onHint("PINCH — move your hand to build");
       } else if (o.getMode() === "move" || o.getMode() === "group") {
         const key = nearestBlock(local);
         if (key) {
@@ -504,23 +520,11 @@ export function createEngine(o: EngineOpts) {
       const previous = xrLastLocal;
       xrLastLocal = local.clone();
       if (!previous) return;
-      if (o.getMode() === "track") {
-        const a = snapLocal(previous), b = snapLocal(local);
-        if (a.distanceTo(b) > 0) {
-          const dist = previous.distanceTo(local);
-          const steps = Math.max(1, Math.ceil(dist / TRACK_SAMPLE));
-          for (let i = 1; i <= steps; i++) {
-            const p = previous.clone().lerp(local, i / steps);
-            const q = snapLocal(p);
-            if (q.y >= 0) {
-              const serialized = coaster.serialize();
-              const lastPt = serialized.pts?.[serialized.pts.length - 1];
-              if (!lastPt || Math.hypot(lastPt.x - q.x * VOXEL, lastPt.y - (q.y * VOXEL + VOXEL * 0.35), lastPt.z - q.z * VOXEL) > VOXEL * 0.45) {
-                coaster.addPoint(q.x, q.y, q.z);
-              }
-            }
-          }
-        }
+      if (o.getMode() === "track" && activeHandStroke === "track") {
+        // Continuous 3D stroke path. The coaster owns smoothing, sample spacing,
+        // straight-run merging and impossible-jump rejection, so the visible
+        // green "draw" follows the pinch without voxel snapping or teleporting.
+        coaster.extendStroke(local, now);
       } else if (o.getMode() === "build") {
         extrudeCells(previous, local);
       } else if ((o.getMode() === "move" || o.getMode() === "group") && grabController.active) {
@@ -553,9 +557,13 @@ export function createEngine(o: EngineOpts) {
         }
       }
     } else if (!isPinching && wasPinching) {
-      if (o.getMode() === "build" && stroke) {
+      if (o.getMode() === "track" && activeHandStroke === "track") {
+        coaster.endStroke();
+        activeHandStroke = null;
+      } else if (o.getMode() === "build" && stroke) {
         commit(stroke);
         stroke = null;
+        activeHandStroke = null;
       } else if ((o.getMode() === "move" || o.getMode() === "group") && grabController.active && xrLastLocal) {
         const target = grabController.updatePosition(xrLastLocal);
         const { keys } = grabController.releaseGrab();
@@ -798,7 +806,11 @@ export function createEngine(o: EngineOpts) {
   const fake = (x: number, y: number) => ({ pointerId: 999, clientX: x, clientY: y } as PointerEvent);
   return {
     resize,
-    getCamera() { return camera; },
+    // Hand tracking must use the same active XR camera when immersive AR is
+    // presenting. Returning the fallback orbit camera here makes lifted
+    // MediaPipe points appear in the wrong 3D location even though the 2D hand
+    // skeleton looks correct over the rear-camera video.
+    getCamera() { return activeCamera() as THREE.PerspectiveCamera; },
     synth(type: "down" | "move" | "up", x: number, y: number) {
       if (type === "down") down(fake(x, y)); else if (type === "move") move(fake(x, y)); else up(fake(x, y));
     },
