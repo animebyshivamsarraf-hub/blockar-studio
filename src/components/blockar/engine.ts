@@ -6,6 +6,7 @@ import { HandController3D } from "./hand/HandController3D";
 import { GrabController3D } from "./interaction/GrabController3D";
 import { deviceTelemetry } from "./device/CapabilityDetector";
 import { createCoaster } from "./coaster";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 export const VOXEL = 0.1; // 10 cm
 export type Shape = "cube" | "sphere" | "cylinder" | "pyramid";
@@ -706,6 +707,43 @@ export function createEngine(o: EngineOpts) {
 
   }
 
+  async function addGLBFromUrl(url: string) {
+    const loader = new GLTFLoader();
+    const gltf = await loader.loadAsync(url);
+    const model = gltf.scene;
+    model.traverse((obj: any) => {
+      if (!obj.isMesh) return;
+      obj.castShadow = false;
+      obj.receiveShadow = false;
+    });
+
+    // Keep generated assets mobile-friendly and consistent with BlockAR's
+    // 1 unit = 1 meter world scale. Normalize the largest dimension to 0.8 m.
+    const before = new THREE.Box3().setFromObject(model);
+    const size = before.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z, 0.001);
+    model.scale.setScalar(Math.min(1, 0.8 / maxDim));
+
+    root.add(model);
+    model.updateMatrixWorld(true);
+
+    // Place at the current AR reticle when available; otherwise use the
+    // construction origin. Lift the model so its lowest point sits on the
+    // placement surface.
+    const target = new THREE.Vector3();
+    if (reticle.visible) {
+      reticle.getWorldPosition(target);
+      root.worldToLocal(target);
+    }
+    const box = new THREE.Box3().setFromObject(model);
+    model.position.y += target.y - box.min.y;
+    model.position.x += target.x;
+    model.position.z += target.z;
+    model.userData.blockarRodinAsset = true;
+    emit();
+    return model;
+  }
+
   // ---- loop ----
   const tmpM = new THREE.Matrix4();
   renderer.setAnimationLoop((_t, frame?: XRFrame) => {
@@ -765,6 +803,7 @@ export function createEngine(o: EngineOpts) {
       if (type === "down") down(fake(x, y)); else if (type === "move") move(fake(x, y)); else up(fake(x, y));
     },
     setScale(sc: number) { root.scale.setScalar(sc); },
+    addGLBFromUrl,
     addMany(list: Cell[]) {
       const chs: Change[] = [];
       for (const c of list) { const key = k(c.x, c.y, c.z); if (cells.has(key)) continue; chs.push({ key, prev: null, next: c }); }
