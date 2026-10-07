@@ -6,6 +6,7 @@ import { COLORS, createEngine, type Engine, type Mode, type Shape } from "./engi
 import { cn } from "@/lib/utils";
 import { HandSystemRuntime, isEnvironmentStream } from "./hand/HandSystemRuntime";
 import { aiBuild } from "@/lib/ai-build.functions";
+import { rodinDownload, rodinGenerate, rodinStatus } from "@/lib/rodin.functions";
 import { Sparkles, Loader2, X, Spline, Play, Square, ArrowUp, ArrowDown, Repeat, Eye, Wand2 } from "lucide-react";
 
 type Stage = "welcome" | "permission" | "scanning" | "build";
@@ -60,6 +61,10 @@ export function BlockAR() {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiText, setAiText] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const [rodinOpen, setRodinOpen] = useState(false);
+  const [rodinPrompt, setRodinPrompt] = useState("");
+  const [rodinBusy, setRodinBusy] = useState(false);
+  const [rodinStatusText, setRodinStatusText] = useState<string | null>(null);
   const [trackN, setTrackN] = useState(0);
   const [loop, setLoop] = useState(false);
   const [riding, setRiding] = useState(false);
@@ -333,6 +338,44 @@ export function BlockAR() {
     setAiBusy(false);
   }
 
+  async function runRodin() {
+    const prompt = rodinPrompt.trim();
+    if (prompt.length < 8 || rodinBusy) return;
+    setRodinBusy(true);
+    setRodinStatusText("Submitting to Rodin…");
+    try {
+      const job = await rodinGenerate({ data: { prompt } });
+      setRodinStatusText("Generating 3D asset…");
+      const deadline = Date.now() + 20 * 60 * 1000;
+      let delay = 5000;
+      let done = false;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        const status = await rodinStatus({ data: { subscriptionKey: job.subscriptionKey } });
+        if (status.status === "failed") throw new Error("Rodin generation failed.");
+        if (status.status === "done") { done = true; break; }
+        setRodinStatusText("Still generating…");
+        delay = Math.min(delay + 5000, 30000);
+      }
+      if (!done) throw new Error("Rodin generation timed out.");
+      setRodinStatusText("Downloading GLB…");
+      const result = await rodinDownload({ data: { taskUuid: job.taskUuid } });
+      if (!engine.current) throw new Error("3D engine is not ready.");
+      setRodinStatusText("Adding asset to AR world…");
+      await engine.current.addGLBFromUrl(result.url);
+      setToast("3D asset added to BlockAR");
+      setRodinOpen(false);
+      setRodinPrompt("");
+      setRodinStatusText(null);
+    } catch (err) {
+      const message = err?.message || "Rodin generation failed";
+      setRodinStatusText(null);
+      setToast(message);
+    } finally {
+      setRodinBusy(false);
+    }
+  }
+
   const co = () => engine.current?.coaster;
   const syncTrack = () => setTrackN(co()?.count() ?? 0);
   useEffect(() => {
@@ -533,15 +576,37 @@ export function BlockAR() {
               </div>
             </div>
           )}
-          {riding ? null : aiOpen ? (
-            <form onSubmit={(e) => { e.preventDefault(); runAI(); }} className="hud pointer-events-auto mb-2 flex items-center gap-2 p-2">
-              <Sparkles className="ml-1 h-5 w-5 shrink-0 text-brand-pink" />
-              <input autoFocus value={aiText} onChange={(e) => setAiText(e.target.value)} maxLength={300} placeholder="Type anything… a house, a tree, a car" className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-muted-foreground" />
-              <button disabled={aiBusy || !aiText.trim()} className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">{aiBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Build"}</button>
-              <button type="button" aria-label="Close" onClick={() => setAiOpen(false)} className="p-1 text-muted-foreground"><X className="h-4 w-4" /></button>
-            </form>
-          ) : (
-            <button onClick={() => setAiOpen(true)} className="pointer-events-auto mx-auto mb-2 flex items-center gap-2 rounded-full bg-gradient-to-r from-brand-violet to-brand-pink px-4 py-2 text-sm font-semibold text-primary-foreground shadow-lg"><Sparkles className="h-4 w-4" />AI Build</button>
+          {riding ? null : (
+            <>
+              {aiOpen ? (
+                <form onSubmit={(e) => { e.preventDefault(); runAI(); }} className="hud pointer-events-auto mb-2 flex items-center gap-2 p-2">
+                  <Sparkles className="ml-1 h-5 w-5 shrink-0 text-brand-pink" />
+                  <input autoFocus value={aiText} onChange={(e) => setAiText(e.target.value)} maxLength={300} placeholder="Build voxel blocks… a house, tree, car" className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-muted-foreground" />
+                  <button disabled={aiBusy || !aiText.trim()} className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">{aiBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Build"}</button>
+                  <button type="button" aria-label="Close" onClick={() => setAiOpen(false)} className="p-1 text-muted-foreground"><X className="h-4 w-4" /></button>
+                </form>
+              ) : rodinOpen ? (
+                <form onSubmit={(e) => { e.preventDefault(); runRodin(); }} className="hud pointer-events-auto mb-2 flex flex-col gap-2 p-2">
+                  <div className="flex items-center gap-2">
+                    <Wand2 className="ml-1 h-5 w-5 shrink-0 text-brand-violet" />
+                    <input autoFocus value={rodinPrompt} onChange={(e) => setRodinPrompt(e.target.value)} maxLength={1024} placeholder="Describe a 3D asset…" className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-muted-foreground" />
+                    <button type="button" aria-label="Close" disabled={rodinBusy} onClick={() => { setRodinOpen(false); setRodinStatusText(null); }} className="p-1 text-muted-foreground disabled:opacity-40"><X className="h-4 w-4" /></button>
+                  </div>
+                  {rodinStatusText && <div className="px-2 text-[11px] text-muted-foreground">{rodinStatusText}</div>}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="px-2 text-[10px] text-muted-foreground">Rodin Gen-2.5 · GLB · mobile-ready</span>
+                    <button disabled={rodinBusy || rodinPrompt.trim().length < 8} className="rounded-xl bg-gradient-to-r from-brand-violet to-brand-pink px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">
+                      {rodinBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Generate 3D"}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div className="pointer-events-auto mx-auto mb-2 flex items-center gap-2">
+                  <button onClick={() => { setAiOpen(true); setRodinOpen(false); }} className="flex items-center gap-2 rounded-full bg-gradient-to-r from-brand-violet to-brand-pink px-4 py-2 text-sm font-semibold text-primary-foreground shadow-lg"><Sparkles className="h-4 w-4" />AI Build</button>
+                  <button onClick={() => { setRodinOpen(true); setAiOpen(false); }} className="flex items-center gap-2 rounded-full border border-brand-violet/60 bg-card/90 px-4 py-2 text-sm font-semibold text-foreground shadow-lg"><Wand2 className="h-4 w-4 text-brand-violet" />AI 3D</button>
+                </div>
+              )}
+            </>
           )}
           {mode === "track" && !riding && (
             <div className="hud pointer-events-auto mb-2 flex items-center justify-between gap-1 p-1.5 text-[10px]">
