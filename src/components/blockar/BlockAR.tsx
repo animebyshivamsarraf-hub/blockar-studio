@@ -24,7 +24,7 @@ const MODES: { id: Mode; label: string; Icon: typeof Box; hint: string }[] = [
   { id: "delete", label: "Delete", Icon: Trash2, hint: "Tap or swipe across blocks to delete" },
   { id: "paint", label: "Paint", Icon: Paintbrush, hint: "Tap or swipe blocks to repaint with selected color" },
   { id: "group", label: "Group", Icon: Group, hint: "Drag a structure to move all connected blocks" },
-  { id: "track", label: "Track", Icon: Spline, hint: "Tap spots to lay coaster track · tap on blocks for hills" },
+  { id: "track", label: "Track", Icon: Spline, hint: "Pinch + move to draw coaster track · release to finish" },
 ];
 const DEMO = [
   { x: -6, y: 0, z: 4 }, { x: -2, y: 0, z: 5 }, { x: 3, y: 2, z: 5 }, { x: 6, y: 7, z: 3 }, { x: 7, y: 8, z: -1 },
