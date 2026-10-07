@@ -26,13 +26,14 @@ export function liftLandmarks(
   H: number,
   prevDepth: number | null,
   imgWidthPx: number,
+  freezeDepth = false,
 ): { points: THREE.Vector3[]; depth: number } {
   const tanHalf = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
   const perPxAt1 = (2 * tanHalf) / H; // world units per CSS px at 1m
   const w = pts[0]!, m = pts[9]!;
   const palmPx = Math.max(8, Math.hypot(w.x - m.x, w.y - m.y));
   let depth = THREE.MathUtils.clamp(PALM_METERS / (palmPx * perPxAt1), 0.18, 1.6);
-  if (prevDepth != null) depth = prevDepth + (depth - prevDepth) * 0.25;
+  if (prevDepth != null) depth = freezeDepth ? prevDepth : prevDepth + (depth - prevDepth) * 0.18;
   const perPx = perPxAt1 * depth;
   const aspect = W / H;
   const points = pts.map((p) => {
