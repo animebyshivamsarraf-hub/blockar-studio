@@ -115,6 +115,9 @@ export class HandSystemRuntime {
   private static readonly MAX_WORKER_RESTARTS = 3;
   private static readonly WORKER_INFERENCE_TIMEOUT_MS = 3500;
   private lastSentTimestamp = 0;
+  // Monotonic submission token prevents a late createImageBitmap() completion
+  // from reusing an inference slot after its safety timeout already fired.
+  private workerSubmissionId = 0;
   private mpFrame: Partial<Record<Side, ScreenLandmark[]>> = {};
   private mpGeneration = 0;
   private xrSession: XRSession | null = null;
@@ -426,6 +429,7 @@ export class HandSystemRuntime {
     this.lastMpDetectT = 0;
     this.lastWorkerSubmitT = 0;
     this.lastSentTimestamp = 0;
+    this.workerSubmissionId++;
     this.mpIntervalMs = MP_INTERVAL_MS;
     this.lastHandRenderT = 0;
     this.backend = "NONE";
@@ -576,11 +580,14 @@ export class HandSystemRuntime {
         if (!this.workerReady || this.workerBusy) return;
         this.lastWorkerSubmitT = now;
         this.workerBusy = true;
+        const submissionId = ++this.workerSubmissionId;
 
-        // Bounded createImageBitmap with safety abort timeout
+        // Bounded createImageBitmap with a safety abort timeout. The token is
+        // important: createImageBitmap() cannot actually be cancelled, so a
+        // late bitmap must never consume a newer inference slot.
         let bitmapResolved = false;
         const bitmapTimeout = window.setTimeout(() => {
-          if (!bitmapResolved && this.workerBusy) {
+          if (submissionId === this.workerSubmissionId && !bitmapResolved && this.workerBusy) {
             this.workerBusy = false;
           }
         }, 1200);
@@ -592,9 +599,8 @@ export class HandSystemRuntime {
         }).then((bitmap) => {
           bitmapResolved = true;
           window.clearTimeout(bitmapTimeout);
-          if (!this.handWorker || !this.workerReady) {
+          if (submissionId !== this.workerSubmissionId || !this.handWorker || !this.workerReady) {
             try { bitmap.close(); } catch {}
-            this.workerBusy = false;
             return;
           }
           try {
@@ -607,12 +613,12 @@ export class HandSystemRuntime {
             }, [bitmap]);
           } catch {
             try { bitmap.close(); } catch {}
-            this.workerBusy = false;
+            if (submissionId === this.workerSubmissionId) this.workerBusy = false;
           }
         }).catch(() => {
           bitmapResolved = true;
           window.clearTimeout(bitmapTimeout);
-          this.workerBusy = false;
+          if (submissionId === this.workerSubmissionId) this.workerBusy = false;
         });
       } else {
         try {
