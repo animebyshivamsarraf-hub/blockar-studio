@@ -66,8 +66,8 @@ const CUBE_SIZE = 0.08;
 // detectForVideo() is synchronous, so running it on every render frame can
 // stall Chrome on mid-range phones. Hand tracking remains responsive at a
 // bounded 15 FPS while the camera and 3D scene continue rendering normally.
-const MP_INTERVAL_MS = 1000 / 15;
-const MP_INTERVAL_CPU_MS = 1000 / 10;
+const MP_INTERVAL_MS = 1000 / 20;
+const MP_INTERVAL_CPU_MS = 1000 / 12;
 const HAND_RENDER_INTERVAL_MS = 1000 / 30;
 const HAND_COLORS: Record<Side, number> = { left: 0x7fb8ff, right: 0x4de8ff };
 
@@ -637,7 +637,7 @@ export class HandSystemRuntime {
       const vw = v.videoWidth || 640, vh = v.videoHeight || 480;
       const sc = Math.max(W / vw, H / vh);
       const imgW = vw * sc;
-      const lifted = liftLandmarks(pts, this.camera, W, H, h.depth, imgW);
+      const lifted = liftLandmarks(pts, this.camera, W, H, h.depth, imgW, h.pinch.held);
       h.depth = lifted.depth;
       out[side] = lifted.points;
     }
