@@ -9,7 +9,9 @@ export interface TrackPoint { x: number; y: number; z: number }
 export function createCoaster(root: THREE.Group, voxel: number) {
   const group = new THREE.Group();
   root.add(group);
+  // Each pinch gesture is an independent stroke.
   const pts: THREE.Vector3[] = [];
+  const segments: THREE.Vector3[][] = [];
   const markers = new THREE.Group();
   root.add(markers);
   let curve: THREE.CatmullRomCurve3 | null = null;
@@ -64,65 +66,110 @@ export function createCoaster(root: THREE.Group, voxel: number) {
 
   function rebuild() {
     clear(group); clear(markers);
-    // endpoint markers only — one sphere per 5 cm sample was visual noise
-    if (pts.length) {
-      for (const p of pts.length > 1 ? [pts[0], pts[pts.length - 1]] : [pts[0]]) { const m = new THREE.Mesh(markGeo, markMat); m.position.copy(p); markers.add(m); }
-    }
-    curve = null; length = 0;
-    if (pts.length < 2) return;
-    const closed = loop && pts.length > 2;
-    curve = new THREE.CatmullRomCurve3(pts, closed, "centripetal", 0.5);
-    length = curve.getLength();
-    const segs = Math.max(12, Math.round(length / TARGET_SAMPLE));
-    const up = new THREE.Vector3(0, 1, 0);
-    const offs = TM.GAUGE * 0.5; // constant 0.12 m gauge
-    const left: THREE.Vector3[] = [], right: THREE.Vector3[] = [];
-    let prevSide: THREE.Vector3 | null = null; let prevTan: THREE.Vector3 | null = null;
-    let lastTieD = -Infinity, lastSupD = -Infinity;
-    for (let i = 0; i <= segs; i++) {
-      const t = i / segs;
-      const p = curve.getPointAt(t);
-      const tan = curve.getTangentAt(t).normalize();
-      // True parallel transport: rotate the previous frame by the tangent change so
-      // the rails can never flip/cross; gently re-level toward world-up when possible.
-      let side: THREE.Vector3;
-      if (!prevSide || !prevTan) {
-        side = new THREE.Vector3().crossVectors(tan, up);
-        if (side.lengthSq() < 1e-4) side.set(1, 0, 0);
-      } else {
-        side = prevSide.clone().applyQuaternion(new THREE.Quaternion().setFromUnitVectors(prevTan, tan));
-        const level = new THREE.Vector3().crossVectors(tan, up);
-        if (level.lengthSq() > 0.09) { level.normalize(); if (level.dot(side) < 0) level.negate(); side.lerp(level, 0.15); }
-      }
-      side.sub(tan.clone().multiplyScalar(side.dot(tan))).normalize();
-      prevSide = side.clone(); prevTan = tan.clone();
-      side.multiplyScalar(offs);
-      left.push(p.clone().add(side)); right.push(p.clone().sub(side));
-      const d = t * length;
-      if (d - lastTieD >= TIE_SPACING) {
-        lastTieD = d;
-        const tie = new THREE.Mesh(new THREE.BoxGeometry(offs * 2.4, voxel * 0.05, voxel * 0.08), tieMat);
-        tie.position.copy(p);
-        tie.lookAt(p.clone().add(tan));
-        group.add(tie);
-      }
-      if (d - lastSupD >= 0.3 && p.y > voxel * 0.3) {
-        lastSupD = d;
-        const h = p.y - voxel * 0.03;
-        const s = new THREE.Mesh(new THREE.CylinderGeometry(voxel * 0.06, voxel * 0.08, h, 8), supMat);
-        s.position.set(p.x, h / 2, p.z);
-        group.add(s);
-        const base = new THREE.Mesh(new THREE.CylinderGeometry(voxel * 0.14, voxel * 0.16, voxel * 0.03, 12), supMat);
-        base.position.set(p.x, voxel * 0.015, p.z);
-        group.add(base);
+    const allSegments = [...segments, pts].filter((s) => s.length > 0);
+
+    for (const seg of allSegments) {
+      for (const p of seg.length > 1 ? [seg[0], seg[seg.length - 1]] : [seg[0]]) {
+        const m = new THREE.Mesh(markGeo, markMat);
+        m.position.copy(p);
+        markers.add(m);
       }
     }
-    const currentRailMat = strokeState ? activeStrokeMat : railMat;
-    for (const side of [left, right]) {
-      const c = new THREE.CatmullRomCurve3(side, closed, "centripetal");
-      group.add(new THREE.Mesh(new THREE.TubeGeometry(c, segs, RAIL_RADIUS, 6, closed), currentRailMat));
+
+    // curve/length represent the active/latest stroke used by Ride.
+    curve = null;
+    length = 0;
+
+    for (const seg of allSegments) {
+      if (seg.length < 2) continue;
+
+      const isActive = seg === pts;
+      const closed = loop && isActive && seg.length > 2;
+      const segCurve = new THREE.CatmullRomCurve3(seg, closed, "centripetal", 0.5);
+      const segLength = segCurve.getLength();
+
+      if (isActive) {
+        curve = segCurve;
+        length = segLength;
+      }
+
+      const segs = Math.max(12, Math.round(segLength / TARGET_SAMPLE));
+      const up = new THREE.Vector3(0, 1, 0);
+      const offs = TM.GAUGE * 0.5;
+      const left: THREE.Vector3[] = [], right: THREE.Vector3[] = [];
+      let prevSide: THREE.Vector3 | null = null;
+      let prevTan: THREE.Vector3 | null = null;
+      let lastTieD = -Infinity, lastSupD = -Infinity;
+
+      for (let i = 0; i <= segs; i++) {
+        const t = i / segs;
+        const p = segCurve.getPointAt(t);
+        const tan = segCurve.getTangentAt(t).normalize();
+
+        let side: THREE.Vector3;
+        if (!prevSide || !prevTan) {
+          side = new THREE.Vector3().crossVectors(tan, up);
+          if (side.lengthSq() < 1e-4) side.set(1, 0, 0);
+        } else {
+          side = prevSide.clone().applyQuaternion(
+            new THREE.Quaternion().setFromUnitVectors(prevTan, tan),
+          );
+          const level = new THREE.Vector3().crossVectors(tan, up);
+          if (level.lengthSq() > 0.09) {
+            level.normalize();
+            if (level.dot(side) < 0) level.negate();
+            side.lerp(level, 0.15);
+          }
+        }
+        side.sub(tan.clone().multiplyScalar(side.dot(tan))).normalize();
+        prevSide = side.clone();
+        prevTan = tan.clone();
+        side.multiplyScalar(offs);
+        left.push(p.clone().add(side));
+        right.push(p.clone().sub(side));
+
+        const d = t * segLength;
+        if (d - lastTieD >= TIE_SPACING) {
+          lastTieD = d;
+          const tie = new THREE.Mesh(
+            new THREE.BoxGeometry(offs * 2.4, voxel * 0.05, voxel * 0.08),
+            tieMat,
+          );
+          tie.position.copy(p);
+          tie.lookAt(p.clone().add(tan));
+          group.add(tie);
+        }
+        if (d - lastSupD >= 0.3 && p.y > voxel * 0.3) {
+          lastSupD = d;
+          const h = p.y - voxel * 0.03;
+          const s = new THREE.Mesh(
+            new THREE.CylinderGeometry(voxel * 0.06, voxel * 0.08, h, 8),
+            supMat,
+          );
+          s.position.set(p.x, h / 2, p.z);
+          group.add(s);
+          const base = new THREE.Mesh(
+            new THREE.CylinderGeometry(voxel * 0.14, voxel * 0.16, voxel * 0.03, 12),
+            supMat,
+          );
+          base.position.set(p.x, voxel * 0.015, p.z);
+          group.add(base);
+        }
+      }
+
+      const currentRailMat = isActive && strokeState ? activeStrokeMat : railMat;
+      for (const side of [left, right]) {
+        const railCurve = new THREE.CatmullRomCurve3(side, closed, "centripetal");
+        group.add(new THREE.Mesh(
+          new THREE.TubeGeometry(railCurve, segs, RAIL_RADIUS, 6, closed),
+          currentRailMat,
+        ));
+      }
+      group.add(new THREE.Mesh(
+        new THREE.TubeGeometry(segCurve, segs, SPINE_RADIUS, 6, closed),
+        tieMat,
+      ));
     }
-    group.add(new THREE.Mesh(new THREE.TubeGeometry(curve, segs, SPINE_RADIUS, 6, closed), tieMat));
   }
 
   function pushPoint(p: THREE.Vector3) {
@@ -179,20 +226,31 @@ export function createCoaster(root: THREE.Group, voxel: number) {
       p.y += dy * voxel; rebuild();
     },
     /** Pinch start: begin a continuous world-space stroke (local coords, metres). */
-    beginStroke(p: THREE.Vector3, now = performance.now(), allowNewBranch = false) {
+    beginStroke(p: THREE.Vector3, now = performance.now(), _allowNewBranch = false) {
       const q = p.clone();
       const last = pts[pts.length - 1];
-      if (!allowNewBranch && last && last.distanceTo(q) > MAX_JOIN) {
-        stats.rejected++; stats.lastReject = "start too far from track end";
-        strokeState = null; return false;
-      }
-      strokeState = { smoothed: q.clone(), lastDir: null, lastT: now, sinceRebuild: 0, runStart: last && pts.length >= 2 ? null : (last ? last.clone() : q.clone()) };
-      if (!last) {
-        pushPoint(q); stats.samples++; rebuild();
-      } else if (allowNewBranch && last.distanceTo(q) > MAX_JOIN) {
-        // Disconnected new stroke: start fresh track path to prevent runaway Catmull-Rom bridging
+
+      // Pinching somewhere else starts a NEW independent stroke. Previous
+      // coaster strokes are never cleared or replaced.
+      if (last && last.distanceTo(q) > MAX_JOIN) {
+        if (pts.length >= 2) segments.push(pts.slice());
         pts.length = 0;
-        pushPoint(q); stats.samples++; rebuild();
+      }
+
+      strokeState = {
+        smoothed: q.clone(),
+        lastDir: null,
+        lastT: now,
+        sinceRebuild: 0,
+        runStart: null,
+      };
+
+      if (!pts.length) {
+        pushPoint(q);
+        stats.samples++;
+        rebuild();
+      } else {
+        strokeState.runStart = pts.length >= 2 ? pts[pts.length - 1].clone() : null;
       }
       return true;
     },
@@ -244,11 +302,27 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     },
     endStroke() { if (strokeState) { strokeState = null; rebuild(); } },
     stats: () => ({ ...stats, points: pts.length, length }),
-    removeLast() { pts.pop(); rebuild(); },
-    clear() { pts.length = 0; strokeState = null; stats.samples = 0; stats.rejected = 0; stats.maxStep = 0; this.stop(); rebuild(); },
+    removeLast() {
+      if (pts.length) pts.pop();
+      else if (segments.length) {
+        const last = segments.pop()!;
+        if (last.length) pts.push(...last);
+      }
+      rebuild();
+    },
+    clear() {
+      pts.length = 0;
+      segments.length = 0;
+      strokeState = null;
+      stats.samples = 0;
+      stats.rejected = 0;
+      stats.maxStep = 0;
+      this.stop();
+      rebuild();
+    },
     setLoop(l: boolean) { loop = l; rebuild(); },
     isLoop: () => loop,
-    count: () => pts.length,
+    count: () => segments.reduce((n, s) => n + s.length, 0) + pts.length,
     hasTrack: () => !!curve,
     setSpeed(f: number) { speedFactor = f; },
     speedKmh: () => Math.round(v * 3.6 * 10), // toy scale ×10 for fun
@@ -266,15 +340,37 @@ export function createCoaster(root: THREE.Group, voxel: number) {
       out.look.copy(f); out.look.y = out.pos.y + THREE.MathUtils.clamp(f.y - p.y, -voxel * 2, voxel * 1.2) - voxel * 0.5;
       root.localToWorld(out.pos); root.localToWorld(out.look);
     },
-    serialize: () => ({ loop, pts: pts.map((p) => ({ x: p.x, y: p.y, z: p.z })) }),
-    load(d?: { loop?: boolean; pts?: TrackPoint[] }) {
-      pts.length = 0; loop = !!d?.loop;
-      for (const p of d?.pts ?? []) pts.push(new THREE.Vector3(p.x, p.y, p.z));
+    serialize: () => ({
+      loop,
+      pts: pts.map((p) => ({ x: p.x, y: p.y, z: p.z })),
+      segments: segments.map((seg) => seg.map((p) => ({ x: p.x, y: p.y, z: p.z }))),
+    }),
+    load(d?: { loop?: boolean; pts?: TrackPoint[]; segments?: TrackPoint[][] }) {
+      pts.length = 0;
+      segments.length = 0;
+      loop = !!d?.loop;
+
+      const savedSegments = Array.isArray(d?.segments) ? d!.segments : [];
+      for (const seg of savedSegments) {
+        if (seg.length >= 2) {
+          segments.push(seg.map((p) => new THREE.Vector3(p.x, p.y, p.z)));
+        }
+      }
+
+      const active = Array.isArray(d?.pts) ? d!.pts : [];
+      for (const p of active) pts.push(new THREE.Vector3(p.x, p.y, p.z));
+
+      if (!pts.length && segments.length) {
+        const last = segments.pop()!;
+        pts.push(...last);
+      }
       rebuild();
     },
     /** preset: generate a fun coaster from grid-space points */
     loadGrid(list: TrackPoint[], l = true) {
-      pts.length = 0; loop = l;
+      pts.length = 0;
+      segments.length = 0;
+      loop = l;
       for (const p of list) pts.push(new THREE.Vector3(p.x * voxel, p.y * voxel, p.z * voxel));
       rebuild();
     },
