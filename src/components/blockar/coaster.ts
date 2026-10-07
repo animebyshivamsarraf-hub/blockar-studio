@@ -170,6 +170,17 @@ export function createCoaster(root: THREE.Group, voxel: number) {
         tieMat,
       ));
     }
+
+    // If the user has started a new one-point stroke, Ride should still use
+    // the most recently completed stroke rather than becoming unavailable.
+    if (!curve) {
+      for (let i = segments.length - 1; i >= 0; i--) {
+        if (segments[i].length < 2) continue;
+        curve = new THREE.CatmullRomCurve3(segments[i], false, "centripetal", 0.5);
+        length = curve.getLength();
+        break;
+      }
+    }
   }
 
   function pushPoint(p: THREE.Vector3) {
