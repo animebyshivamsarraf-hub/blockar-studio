@@ -24,11 +24,32 @@ export function createCoaster(root: THREE.Group, voxel: number) {
   const SPINE_RADIUS = TM.SPINE_RADIUS;
   const TIE_SPACING = TM.TIE_SPACING;
 
-  const railMat = new THREE.MeshStandardMaterial({ color: "#f1fbff", roughness: 0.3, metalness: 0.4, emissive: "#2fd8ff", emissiveIntensity: 0.25 }); // white rail, subtle cyan glow
-  const activeStrokeMat = new THREE.MeshStandardMaterial({ color: "#00e676", roughness: 0.3, emissive: "#00703c", emissiveIntensity: 0.4 }); // luminous green
-  const tieMat = new THREE.MeshStandardMaterial({ color: "#e2e8f0", roughness: 0.5 }); // light steel / white
-  const supMat = new THREE.MeshStandardMaterial({ color: "#00897b", roughness: 0.4, metalness: 0.3 }); // teal
+  // Reference-style neon construction: bright cyan dual rails, emissive spine,
+  // pale cross-ties, and thin cyan supports with grounded base plates.
+  const railMat = new THREE.MeshStandardMaterial({
+    color: "#dffcff", roughness: 0.2, metalness: 0.55,
+    emissive: "#00dfff", emissiveIntensity: 1.15,
+  });
+  const activeStrokeMat = new THREE.MeshStandardMaterial({
+    color: "#b8fff0", roughness: 0.22, metalness: 0.45,
+    emissive: "#00ffb7", emissiveIntensity: 1.35,
+  });
+  const tieMat = new THREE.MeshStandardMaterial({
+    color: "#eaf7ff", roughness: 0.42, metalness: 0.5,
+    emissive: "#69dfff", emissiveIntensity: 0.18,
+  });
+  const supMat = new THREE.MeshStandardMaterial({
+    color: "#39e9ef", roughness: 0.3, metalness: 0.45,
+    emissive: "#00cfe8", emissiveIntensity: 0.85,
+  });
   const markMat = new THREE.MeshBasicMaterial({ color: "#4dff88" });
+  const railGlowMat = new THREE.MeshBasicMaterial({
+    color: "#00dfff", transparent: true, opacity: 0.13, depthWrite: false,
+  });
+  const supportBaseMat = new THREE.MeshStandardMaterial({
+    color: "#27dce8", roughness: 0.35, metalness: 0.5,
+    emissive: "#00bcd4", emissiveIntensity: 0.65,
+  });
   const markGeo = new THREE.SphereGeometry(voxel * 0.18, 12, 8);
 
   // train: 3 cars
@@ -148,12 +169,20 @@ export function createCoaster(root: THREE.Group, voxel: number) {
           );
           s.position.set(p.x, h / 2, p.z);
           group.add(s);
+          // Grounding plate keeps every support visibly planted on the
+          // anchored room surface instead of looking like a floating pole.
           const base = new THREE.Mesh(
             new THREE.CylinderGeometry(voxel * 0.14, voxel * 0.16, voxel * 0.03, 12),
-            supMat,
+            supportBaseMat,
           );
           base.position.set(p.x, voxel * 0.015, p.z);
           group.add(base);
+          const plate = new THREE.Mesh(
+            new THREE.BoxGeometry(voxel * 0.34, voxel * 0.018, voxel * 0.34),
+            supportBaseMat,
+          );
+          plate.position.set(p.x, voxel * 0.006, p.z);
+          group.add(plate);
         }
       }
 
@@ -161,8 +190,14 @@ export function createCoaster(root: THREE.Group, voxel: number) {
       for (const side of [left, right]) {
         const railCurve = new THREE.CatmullRomCurve3(side, closed, "centripetal");
         group.add(new THREE.Mesh(
-          new THREE.TubeGeometry(railCurve, segs, RAIL_RADIUS, 6, closed),
+          new THREE.TubeGeometry(railCurve, segs, RAIL_RADIUS, 8, closed),
           currentRailMat,
+        ));
+        // A slightly larger transparent tube supplies the soft neon halo
+        // without post-processing, keeping mobile AR performance predictable.
+        group.add(new THREE.Mesh(
+          new THREE.TubeGeometry(railCurve, segs, RAIL_RADIUS * 2.4, 6, closed),
+          railGlowMat,
         ));
       }
       group.add(new THREE.Mesh(
