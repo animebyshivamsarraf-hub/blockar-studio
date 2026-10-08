@@ -426,6 +426,11 @@ export function createEngine(o: EngineOpts) {
 
   let xrSession: XRSession | null = null;
   let xrReferenceSpace: XRReferenceSpace | null = null;
+  // Persistent WebXR world anchor. When the browser/device supports anchors,
+  // this is the authoritative pose for the construction root. The root is
+  // never re-created from the camera after placement.
+  let xrAnchor: XRAnchor | null = null;
+  let lastHitResult: XRHitTestResult | null = null;
 
   // Genuine WebXR articulated-hand state. This is only active inside an XR session
   // that actually exposes hand-tracking; MediaPipe remains a separate fallback.
@@ -758,7 +763,7 @@ export function createEngine(o: EngineOpts) {
     const viewer = await session.requestReferenceSpace("viewer");
     hitSource = (await session.requestHitTestSource?.({ space: viewer })) ?? null;
     grid.visible = false; anchored = false;
-    session.addEventListener("select", () => {
+    session.addEventListener("select", async () => {
       if (!reticle.visible) return;
       if (!anchored) {
         // The reticle already carries the real surface pose in scene/world space.
@@ -786,9 +791,22 @@ export function createEngine(o: EngineOpts) {
           root.quaternion.copy(anchorQuat);
         }
         root.updateMatrixWorld(true);
+        // Prefer a real XRAnchor when the AR implementation exposes it. The
+        // anchor is tied to the hit-test pose, not to the viewer/camera, so
+        // camera motion produces natural parallax while the coaster remains
+        // fixed to the same physical location.
+        xrAnchor = null;
+        try {
+          const candidate = lastHitResult as any;
+          if (candidate?.createAnchor) xrAnchor = await candidate.createAnchor();
+        } catch {
+          // Hit-test + local-floor is still a stable fallback when anchors are
+          // unavailable; never fake stability by moving the root with camera pose.
+          xrAnchor = null;
+        }
         reticle.visible = false;
         anchored = true; grid.visible = false;
-        o.onHint(`ANCHOR LOCKED ON ${surfaceHit.surfaceType.toUpperCase()} — build stays in your room`);
+        o.onHint(`${xrAnchor ? "WORLD ANCHOR LOCKED" : "WORLD SPACE LOCKED"} — ${surfaceHit.surfaceType.toUpperCase()}`);
       }
       // center-screen ray: face adjacency first
       const h = hitFrom(new THREE.Vector2(0, 0));
@@ -796,6 +814,9 @@ export function createEngine(o: EngineOpts) {
       if (mode === "track" && h.add) coaster.addPoint(...h.add); else if (mode === "build" && h.add) place(h.add); else if (mode !== "build") applyTool(h);
     });
     session.addEventListener("end", () => {
+      try { xrAnchor?.delete?.(); } catch {}
+      xrAnchor = null;
+      lastHitResult = null;
       hitSource = null; xrSession = null; xrReferenceSpace = null;
       xrHandSeen = false; xrHandFrozen = false; xrLastLocal = null; handWasPinching = false;
       if (pinchMarker) pinchMarker.visible = false;
@@ -861,6 +882,7 @@ export function createEngine(o: EngineOpts) {
     }
     if (frame && hitSource && !anchored) {
       const res = frame.getHitTestResults(hitSource);
+      lastHitResult = res.length ? res[0] : null;
       const ref = renderer.xr.getReferenceSpace();
       if (res.length && ref) {
         const pose = res[0].getPose(ref);
@@ -871,6 +893,18 @@ export function createEngine(o: EngineOpts) {
           reticle.visible = true;
         }
       } else reticle.visible = false;
+    } else if (frame && xrAnchor && xrReferenceSpace) {
+      // Once placed, follow ONLY the persistent XR anchor pose. Never derive
+      // the world root from the current viewer/camera pose.
+      const anchorPose = frame.getPose(xrAnchor.anchorSpace, xrReferenceSpace);
+      if (anchorPose) {
+        tmpM.fromArray(anchorPose.transform.matrix);
+        root.position.setFromMatrixPosition(tmpM);
+        root.quaternion.setFromRotationMatrix(tmpM);
+        root.updateMatrixWorld(true);
+      }
+      reticle.visible = false;
+      selBox.visible = false;
     } else {
       const h = hitFrom(new THREE.Vector2(0, 0));
       if ((mode === "build" || mode === "track") && h.add) {
