@@ -4,7 +4,8 @@ import { computeStrictTimestamp } from "./workerPolicy";
 // WASM is bundled with the app (public/wasm/) instead of CDN — eliminates
 // CDN/version-mismatch failures ("ModuleFactory not set") entirely.
 const getWasmUrl = () => `${self.location.origin}/wasm`;
-const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+// Model is bundled with the app (public/models/) — zero runtime CDN dependency.
+const getModelUrl = () => `${self.location.origin}/models/hand_landmarker.task`;
 
 // Bounds an async step so a hung GPU delegate (never resolves, never throws —
 // seen on some Android GPUs) can't wedge init forever. The caller falls back
@@ -38,7 +39,7 @@ const makeLandmarker = async (
   delegate: "GPU" | "CPU",
 ) =>
   HandLandmarker.createFromOptions(fileset, {
-    baseOptions: { modelAssetPath: MODEL, delegate },
+    baseOptions: { modelAssetPath: getModelUrl(), delegate },
     runningMode: "VIDEO",
     numHands: 2,
     minHandDetectionConfidence: 0.5,

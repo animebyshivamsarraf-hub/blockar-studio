@@ -9,7 +9,9 @@ import { GrabController3D } from "../interaction/GrabController3D";
 // CDN/version-mismatch failures ("ModuleFactory not set") entirely.
 // Lazy: module is also imported in non-DOM test environments.
 const getWasmUrl = () => `${window.location.origin}/wasm`;
-const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+// Model is bundled with the app (public/models/) — zero runtime CDN dependency.
+// Lazy: module is also imported in non-DOM test environments.
+const getModelUrl = () => `${window.location.origin}/models/hand_landmarker.task`;
 
 export type SystemState = "OFF" | "STARTING" | "INITIALIZING" | "TRACKING" | "ERROR";
 export type Backend = "NONE" | "WEBXR" | "MEDIAPIPE" | "DEMO";
@@ -293,7 +295,7 @@ export class HandSystemRuntime {
     const init = (async () => {
       const fileset = await FilesetResolver.forVisionTasks(getWasmUrl());
       const opts = (delegate: "GPU" | "CPU") => ({
-        baseOptions: { modelAssetPath: MODEL, delegate },
+        baseOptions: { modelAssetPath: getModelUrl(), delegate },
         runningMode: "LIVE_STREAM" as const,
         numHands: 2,
         minHandDetectionConfidence: 0.5,
@@ -320,7 +322,10 @@ export class HandSystemRuntime {
 
   private async startMediaPipeWorker(generation: number) {
     this.handWorker?.terminate();
-    this.handWorker = new Worker(new URL("./hand-landmarker.worker.ts", import.meta.url), { type: "module" });
+    // Classic worker (NOT module): MediaPipe's WASM loader uses importScripts
+    // which sets self.ModuleFactory via global var. In a module worker the
+    // dynamic import() keeps ModuleFactory module-scoped -> "ModuleFactory not set".
+    this.handWorker = new Worker(new URL("./hand-landmarker.worker.ts", import.meta.url));
     this.workerReady = false;
     this.workerBusy = false;
     this.workerRestarting = false;
