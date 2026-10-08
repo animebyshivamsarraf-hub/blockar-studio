@@ -190,22 +190,47 @@ export function BlockAR() {
 
   async function enterXR() {
     if (!engine.current || !overlayRef.current) return;
-    const handsWereOn = hand === "on" && backendType === "MEDIAPIPE FALLBACK";
+
+    const isMobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+    const handsActive = hand === "on" && !!handRuntime.current;
+
+    // On phones, immersive-ar and getUserMedia may need exclusive access to
+    // the same rear camera. Keeping MediaPipe alive while starting WebXR can
+    // leave the DOM video frozen, which makes MediaPipe report HAND: LOST.
+    // Never enter this conflicting state. Users can keep hand control in the
+    // rear-camera mode, or turn it off before starting true WebXR AR.
+    if (isMobile && handsActive) {
+      setToast("Hand Control is active — turn it off before starting Room AR");
+      return;
+    }
+
+    // If a normal rear-camera stream is open, release it BEFORE requesting
+    // immersive-ar. This avoids the opposite camera-ownership race.
+    if (streamRef.current) {
+      stopHands.current?.();
+      stopHands.current = null;
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      setCamOk(false);
+      setHand("off");
+      setHandSeen(false);
+      setHandError(null);
+      clearHandCanvas();
+    }
+
     try {
-      // Try to start AR while the rear camera (and MediaPipe hand tracking) stay alive.
       await engine.current.startXR(overlayRef.current);
       setToast("AR on — choose a surface, then pinch to build");
-    } catch {
-      // Some browsers only grant AR when no other camera stream is open: release it once and retry.
+    } catch (err) {
+      // If WebXR cannot start, restore the normal rear-camera mode instead
+      // of leaving the app with a dead/frozen camera.
+      setToast((err as Error).message || "AR could not start");
       try {
-        stopHands.current?.(); stopHands.current = null;
-        streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setCamOk(false);
-        await engine.current.startXR(overlayRef.current);
-        setToast("AR on — choose a surface, then pinch to build");
-      } catch (err) { setToast((err as Error).message || "AR could not start"); }
+        await allowCamera();
+      } catch {
+        // The error toast from allowCamera is already user-visible.
+      }
     }
-    // Keep hand control alive: native XR joints if exposed, otherwise re-attach the camera tracker.
-    if (handsWereOn && !handRuntime.current) { setHand("off"); setTimeout(() => { void toggleHandsRef.current?.(); }, 300); }
   }
   const toggleHandsRef = useRef<(() => Promise<void>) | null>(null);
 
