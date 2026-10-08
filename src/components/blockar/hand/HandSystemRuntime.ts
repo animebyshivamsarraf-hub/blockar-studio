@@ -5,7 +5,10 @@ import { PinchStateMachine, type PinchPhase } from "./PinchStateMachine";
 import { liftLandmarks, syntheticHand, XR_TO_MP_JOINTS, type ScreenLandmark } from "./landmarkMapping";
 import { GrabController3D } from "../interaction/GrabController3D";
 
-const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
+// WASM is bundled with the app (public/wasm/) instead of CDN — eliminates
+// CDN/version-mismatch failures ("ModuleFactory not set") entirely.
+// Lazy: module is also imported in non-DOM test environments.
+const getWasmUrl = () => `${window.location.origin}/wasm`;
 const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
 export type SystemState = "OFF" | "STARTING" | "INITIALIZING" | "TRACKING" | "ERROR";
@@ -288,7 +291,7 @@ export class HandSystemRuntime {
 
     const { FilesetResolver, HandLandmarker } = await import("@mediapipe/tasks-vision");
     const init = (async () => {
-      const fileset = await FilesetResolver.forVisionTasks(WASM);
+      const fileset = await FilesetResolver.forVisionTasks(getWasmUrl());
       const opts = (delegate: "GPU" | "CPU") => ({
         baseOptions: { modelAssetPath: MODEL, delegate },
         runningMode: "LIVE_STREAM" as const,
@@ -588,10 +591,6 @@ export class HandSystemRuntime {
         let bitmapResolved = false;
         const bitmapTimeout = window.setTimeout(() => {
           if (submissionId === this.workerSubmissionId && !bitmapResolved && this.workerBusy) {
-            // createImageBitmap() cannot be cancelled. Invalidate this
-            // submission before freeing the inference slot, otherwise the
-            // late bitmap could be posted together with a newer frame.
-            this.workerSubmissionId++;
             this.workerBusy = false;
           }
         }, 1200);

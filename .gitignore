@@ -30,3 +30,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# MediaPipe WASM is copied at build time by scripts/copy-wasm.mjs
+public/wasm/

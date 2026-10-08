@@ -1,7 +1,9 @@
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 import { computeStrictTimestamp } from "./workerPolicy";
 
-const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
+// WASM is bundled with the app (public/wasm/) instead of CDN — eliminates
+// CDN/version-mismatch failures ("ModuleFactory not set") entirely.
+const getWasmUrl = () => `${self.location.origin}/wasm`;
 const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
 // Bounds an async step so a hung GPU delegate (never resolves, never throws —
@@ -26,7 +28,7 @@ let lastTimestamp = -1;
 
 async function getFileset() {
   if (!cachedFileset) {
-    cachedFileset = await FilesetResolver.forVisionTasks(WASM);
+    cachedFileset = await FilesetResolver.forVisionTasks(getWasmUrl());
   }
   return cachedFileset;
 }
