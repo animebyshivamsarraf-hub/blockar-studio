@@ -237,6 +237,19 @@ export function BlockAR() {
   useEffect(() => { engine.current?.setScale(1); }, [size, stage]);
   useEffect(() => () => stopHands.current?.(), []);
 
+  // The <video> element mounts only when camOk flips true, and React commits
+  // that asynchronously — so after allowCamera() the ref can still be null.
+  // Wait for it instead of throwing "not mounted" on a timing race.
+  async function waitForVideoElement(timeoutMs = 4000): Promise<HTMLVideoElement> {
+    const start = Date.now();
+    for (;;) {
+      const v = videoRef.current;
+      if (v) return v;
+      if (Date.now() - start > timeoutMs) throw new Error("Rear camera video layer not mounted");
+      await new Promise((r) => setTimeout(r, 60));
+    }
+  }
+
   async function toggleHands() {
     if (hand === "starting" || hand === "initializing") return;
 
@@ -292,8 +305,7 @@ export function BlockAR() {
       }
       if (!activeStream) throw new Error("Camera could not be activated");
       if (!handCanvas.current) throw new Error("Hand layer not mounted");
-      const hv = videoRef.current;
-      if (!hv) throw new Error("Rear camera video layer not mounted");
+      const hv = await waitForVideoElement();
 
       setHand("initializing");
       hv.muted = true;
