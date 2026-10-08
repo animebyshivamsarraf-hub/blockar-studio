@@ -499,7 +499,7 @@ export function BlockAR() {
       {camOk && <video ref={videoRef} playsInline muted className="absolute inset-0 h-full w-full object-cover" />}
       {!camOk && <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_70%,var(--glow),transparent_65%)]" />}
       {stage === "build" && <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />}
-      <canvas ref={handCanvas} className="pointer-events-none absolute inset-0 h-full w-full" />
+      <canvas ref={handCanvas} className="pointer-events-none absolute inset-0 h-full w-full mix-blend-screen" />
       {handLabels.map((l) => (
         <div key={l.side} className="pointer-events-none absolute -translate-x-1/2 rounded-full border border-success/60 bg-background/60 px-2 py-0.5 text-[10px] font-bold tracking-wider text-success" style={{ left: l.x, top: l.y - 38 }}>{l.text}</div>
       ))}
