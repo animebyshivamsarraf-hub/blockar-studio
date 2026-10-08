@@ -43,6 +43,9 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     emissive: "#00cfe8", emissiveIntensity: 0.85,
   });
   const markMat = new THREE.MeshBasicMaterial({ color: "#4dff88" });
+  const activeDotMat = new THREE.MeshBasicMaterial({
+    color: "#ffffff", transparent: true, opacity: 0.95,
+  });
   const railGlowMat = new THREE.MeshBasicMaterial({
     color: "#00dfff", transparent: true, opacity: 0.13, depthWrite: false,
   });
@@ -183,6 +186,15 @@ export function createCoaster(root: THREE.Group, voxel: number) {
           );
           plate.position.set(p.x, voxel * 0.006, p.z);
           group.add(plate);
+          // Small glowing collar at the rail/support junction adds the
+          // manufactured AR-toy look without expensive post-processing.
+          const collar = new THREE.Mesh(
+            new THREE.TorusGeometry(voxel * 0.075, voxel * 0.012, 6, 16),
+            railMat,
+          );
+          collar.rotation.x = Math.PI / 2;
+          collar.position.set(p.x, Math.max(voxel * 0.04, p.y), p.z);
+          group.add(collar);
         }
       }
 
