@@ -239,12 +239,12 @@ export function createCoaster(root: THREE.Group, voxel: number) {
     /** Pinch start: begin a continuous world-space stroke (local coords, metres). */
     beginStroke(p: THREE.Vector3, now = performance.now(), _allowNewBranch = false) {
       const q = p.clone();
-      const last = pts[pts.length - 1];
 
-      // Pinching somewhere else starts a NEW independent stroke. Previous
-      // coaster strokes are never cleared or replaced.
-      if (last && last.distanceTo(q) > MAX_JOIN) {
-        if (pts.length >= 2) segments.push(pts.slice());
+      // Every new pinch is a NEW independent stroke. Never join two separate
+      // pinches just because their endpoints happen to be close; that was the
+      // source of unwanted bridge curves and made the coaster feel "stuck".
+      if (pts.length) {
+        segments.push(pts.slice());
         pts.length = 0;
       }
 
