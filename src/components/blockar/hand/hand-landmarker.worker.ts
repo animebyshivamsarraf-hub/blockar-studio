@@ -1,8 +1,20 @@
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 import { computeStrictTimestamp } from "./workerPolicy";
 
-const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm";
+const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
 const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+
+// Bounds an async step so a hung GPU delegate (never resolves, never throws —
+// seen on some Android GPUs) can't wedge init forever. The caller falls back
+// to CPU or surfaces a labeled error instead.
+const withTimeout = <T>(p: Promise<T>, ms: number, label: string): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s — check network`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
 
 let landmarker: HandLandmarker | null = null;
 let cachedFileset: Awaited<ReturnType<typeof FilesetResolver.forVisionTasks>> | null = null;
@@ -36,14 +48,15 @@ const init = async (
   g: number,
   preferred: "GPU" | "CPU",
 ) => {
-  const fileset = await getFileset();
+  const fileset = await withTimeout(getFileset(), 20000, "MediaPipe WASM download");
   let task: HandLandmarker;
   let delegate = preferred;
   try {
-    task = await makeLandmarker(fileset, preferred);
+    task = await withTimeout(makeLandmarker(fileset, preferred), 15000, `MediaPipe ${preferred} init`);
   } catch (e) {
     if (preferred !== "GPU") throw e;
-    task = await makeLandmarker(fileset, "CPU");
+    // GPU delegate failed or hung — fall back to CPU rather than erroring out.
+    task = await withTimeout(makeLandmarker(fileset, "CPU"), 30000, "MediaPipe CPU init");
     delegate = "CPU";
   }
   if (g !== generation) {

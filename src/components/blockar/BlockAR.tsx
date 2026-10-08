@@ -537,7 +537,7 @@ export function BlockAR() {
                       {backendType}
                     </span>
                     <span>
-                      {hand === "off" ? "Tap to enable" : hand === "error" ? (handError?.slice(0, 24) || "Failed") : hand === "on" ? (handSeen ? "Hand detected" : "Looking for hand…") : "Please wait…"}
+                      {hand === "off" ? "Tap to enable" : hand === "error" ? (handError?.slice(0, 140) || "Failed") : hand === "on" ? (handSeen ? "Hand detected" : "Looking for hand…") : "Please wait…"}
                     </span>
                   </div>
                 </button>

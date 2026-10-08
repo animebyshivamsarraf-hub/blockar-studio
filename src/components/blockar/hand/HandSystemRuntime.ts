@@ -5,7 +5,7 @@ import { PinchStateMachine, type PinchPhase } from "./PinchStateMachine";
 import { liftLandmarks, syntheticHand, XR_TO_MP_JOINTS, type ScreenLandmark } from "./landmarkMapping";
 import { GrabController3D } from "../interaction/GrabController3D";
 
-const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm";
+const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
 const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
 export type SystemState = "OFF" | "STARTING" | "INITIALIZING" | "TRACKING" | "ERROR";
@@ -324,7 +324,7 @@ export class HandSystemRuntime {
     this.lastWorkerSubmitT = 0;
 
     const ready = new Promise<void>((resolve, reject) => {
-      const timer = window.setTimeout(() => reject(new Error("MediaPipe worker timed out (20s) — check network")), 20000);
+      const timer = window.setTimeout(() => reject(new Error("MediaPipe worker timed out (80s) — check network")), 80000);
       const worker = this.handWorker!;
       worker.onmessage = (event: MessageEvent) => {
         const data = event.data ?? {};
