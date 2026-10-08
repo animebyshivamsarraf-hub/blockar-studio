@@ -191,17 +191,14 @@ export function BlockAR() {
   async function enterXR() {
     if (!engine.current || !overlayRef.current) return;
 
-    const isMobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
-    const handsActive = hand === "on" && !!handRuntime.current;
-
-    // On phones, immersive-ar and getUserMedia may need exclusive access to
-    // the same rear camera. Keeping MediaPipe alive while starting WebXR can
-    // leave the DOM video frozen, which makes MediaPipe report HAND: LOST.
-    // Never enter this conflicting state. Users can keep hand control in the
-    // rear-camera mode, or turn it off before starting true WebXR AR.
-    if (isMobile && handsActive) {
-      setToast("Hand Control is active — turn it off before starting Room AR");
-      return;
+    // WebXR immersive AR owns the device camera/compositor. If MediaPipe is
+    // currently using getUserMedia, stop that pipeline first instead of
+    // blocking the AR transition or allowing two camera owners to fight.
+    if (handRuntime.current || streamRef.current) {
+      stopHands.current?.();
+      stopHands.current = null;
+      handRuntime.current?.dispose?.();
+      handRuntime.current = null;
     }
 
     // If a normal rear-camera stream is open, release it BEFORE requesting
@@ -283,10 +280,23 @@ export function BlockAR() {
       return;
     }
 
-    // Phones: WebXR AR exposes no hand joints, so MediaPipe reads the camera.
-    // We keep the AR session (and therefore the real-world anchor) alive if the
-    // camera can be shared; only if the OS refuses do we leave AR, and even
-    // then the anchored construction root keeps its real-world pose.
+    // On Android immersive WebXR normally owns the camera. A DOM
+    // getUserMedia stream cannot safely read the same XR camera, so never start
+    // MediaPipe inside immersive AR unless native XR hand joints are available.
+    // This prevents the old camera-freeze/hand-lost loop and keeps the AR world
+    // genuinely room-locked. Exit AR to use the MediaPipe camera fallback.
+    if (e0?.isXR()) {
+      setBackendType("MEDIAPIPE FALLBACK");
+      setHand("error");
+      setHandError("This AR session owns the camera. MediaPipe camera hands are available after exiting AR; native WebXR hand tracking is used when the device exposes it.");
+      setDebouncedHandStatus("lost");
+      setToast(e0.xrHandCount() > 0
+        ? "WebXR hands available — use pinch in AR"
+        : "Stable Room AR active. Exit AR for camera-based hand tracking on this device.");
+      return;
+    }
+
+    // Non-XR phone mode: MediaPipe reads the rear camera.
     setBackendType("MEDIAPIPE FALLBACK");
     try {
       let activeStream = streamRef.current;
