@@ -588,6 +588,10 @@ export class HandSystemRuntime {
         let bitmapResolved = false;
         const bitmapTimeout = window.setTimeout(() => {
           if (submissionId === this.workerSubmissionId && !bitmapResolved && this.workerBusy) {
+            // createImageBitmap() cannot be cancelled. Invalidate this
+            // submission before freeing the inference slot, otherwise the
+            // late bitmap could be posted together with a newer frame.
+            this.workerSubmissionId++;
             this.workerBusy = false;
           }
         }, 1200);
