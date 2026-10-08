@@ -88,6 +88,94 @@ export function createEngine(o: EngineOpts) {
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ visible: false }));
   root.add(floor);
 
+  // Spatial depth ruler: during a pinch/grab, show a true 3D drop line from
+  // the hand/pinch point down to the construction floor. The ruler is part of
+  // the anchored world (never camera-relative), so its length is meaningful in
+  // the same meter-scale coordinate system as the coaster.
+  const spatialGuide = new THREE.Group();
+  spatialGuide.visible = false;
+  root.add(spatialGuide);
+  const spatialLine = new THREE.Line(
+    new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({ color: 0x20e8ff, transparent: true, opacity: 0.95 }),
+  );
+  spatialGuide.add(spatialLine);
+
+  const spatialTop = new THREE.Mesh(
+    new THREE.SphereGeometry(0.012, 12, 8),
+    new THREE.MeshBasicMaterial({ color: 0x4dff88, transparent: true, opacity: 0.95 }),
+  );
+  spatialGuide.add(spatialTop);
+
+  const spatialGround = new THREE.Mesh(
+    new THREE.RingGeometry(0.018, 0.032, 32),
+    new THREE.MeshBasicMaterial({ color: 0x20e8ff, transparent: true, opacity: 0.85, side: THREE.DoubleSide }),
+  );
+  spatialGround.rotation.x = -Math.PI / 2;
+  spatialGuide.add(spatialGround);
+
+  const spatialTicks = new THREE.Group();
+  spatialGuide.add(spatialTicks);
+  const tickMaterial = new THREE.LineBasicMaterial({ color: 0x20e8ff, transparent: true, opacity: 0.8 });
+  const tickLines: THREE.Line[] = [];
+  for (let i = 0; i < 32; i++) {
+    const tick = new THREE.Line(new THREE.BufferGeometry(), tickMaterial);
+    tickLines.push(tick);
+    spatialTicks.add(tick);
+  }
+
+  let spatialDistance = 0;
+  function updateSpatialGuide(local: THREE.Vector3 | null, active: boolean) {
+    if (!local || !active) {
+      spatialGuide.visible = false;
+      return;
+    }
+    const top = local.clone();
+    const bottomY = 0.004;
+    const height = Math.abs(top.y - bottomY);
+    if (!Number.isFinite(height) || height < 0.015) {
+      spatialGuide.visible = false;
+      return;
+    }
+    const bottom = new THREE.Vector3(top.x, bottomY, top.z);
+    const linePos = new Float32Array([
+      top.x, top.y, top.z,
+      bottom.x, bottom.y, bottom.z,
+    ]);
+    spatialLine.geometry.setAttribute("position", new THREE.Float32BufferAttribute(linePos, 3));
+    spatialLine.geometry.computeBoundingSphere();
+    spatialTop.position.copy(top);
+    spatialGround.position.copy(bottom);
+
+    const tickCount = Math.min(32, Math.max(1, Math.floor(height / 0.1)));
+    for (let i = 0; i < tickLines.length; i++) {
+      const tick = tickLines[i]!;
+      if (i >= tickCount) {
+        tick.visible = false;
+        continue;
+      }
+      const y = bottomY + (i + 1) * 0.1;
+      if (y >= top.y - 0.015) {
+        tick.visible = false;
+        continue;
+      }
+      const half = i % 5 === 4 ? 0.035 : 0.022;
+      const p = new Float32Array([
+        top.x - half, y, top.z,
+        top.x + half, y, top.z,
+      ]);
+      tick.geometry.setAttribute("position", new THREE.Float32BufferAttribute(p, 3));
+      tick.geometry.computeBoundingSphere();
+      tick.visible = true;
+    }
+    spatialDistance = height;
+    spatialGuide.visible = true;
+  }
+
+  function hideSpatialGuide() {
+    spatialGuide.visible = false;
+  }
+
   // reticle: glowing square
   const reticle = new THREE.Group();
   const sq = new THREE.LineSegments(
@@ -426,6 +514,7 @@ export function createEngine(o: EngineOpts) {
 
     if (!local) {
       xrHandSeen = false;
+      hideSpatialGuide();
 
       if ((grabController.active || activeHandStroke) && now - (handSeenAt || 0) > XR_HAND_LOST_GRACE_MS) {
         xrHandFrozen = true;
@@ -445,6 +534,10 @@ export function createEngine(o: EngineOpts) {
       pinchMarker.position.copy(root.localToWorld(local.clone()));
       pinchMarker.visible = pinching;
     }
+    // This is the spatial cue from the reference: while the user pinches/grabs,
+    // drop a measured vertical guide to the anchored floor so the renderer has
+    // an explicit depth relationship instead of relying on a 2D cursor.
+    updateSpatialGuide(local, pinching || grabController.active || activeHandStroke !== null);
     handSeenAt = now;
 
     if (wasFrozen) {
@@ -602,6 +695,7 @@ export function createEngine(o: EngineOpts) {
         }
       }
       if (pinchMarker) pinchMarker.visible = false;
+      hideSpatialGuide();
       xrLastLocal = null;
       xrHandFrozen = false;
       xrReacquireFrames = 0;
@@ -843,6 +937,8 @@ export function createEngine(o: EngineOpts) {
     },
     isAnchored: () => anchored,
     spatialHit: () => surfaceHit,
+    // Last measured hand-to-floor distance in meters (construction space).
+    spatialDistance: () => spatialDistance,
     // Screen-space fallback: used when no lifted world point is available.
     // If point3D is supplied, it is already WORLD SPACE and must never be
     // passed through camera.localToWorld() again.
