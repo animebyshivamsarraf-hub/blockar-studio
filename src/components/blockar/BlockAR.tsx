@@ -542,14 +542,14 @@ export function BlockAR() {
                   disabled={hand === "starting" || hand === "initializing"}
                   className={cn(
                     "hud pointer-events-auto flex w-[116px] flex-col items-start gap-1 p-2 text-[10px] select-none transition-all active:scale-95 border",
-                    hand === "on" ? "border-brand-cyan bg-card/95 shadow-md" : hand === "error" ? "border-destructive bg-destructive/10" : "border-border/60 hover:border-brand-cyan/50",
+                    hand === "on" ? "border-brand-cyan bg-card/95 shadow-md" : "border-border/60 hover:border-brand-cyan/50",
                     (hand === "starting" || hand === "initializing") && "cursor-wait opacity-70"
                   )}
                 >
                   <div className="flex w-full items-center justify-between gap-1 font-semibold uppercase tracking-wider">
                     <div className="flex items-center gap-1.5">
                       <Hand className={cn("h-3.5 w-3.5", hand === "on" ? "text-brand-cyan" : "text-muted-foreground")} />
-                      <span>{hand === "off" ? "Hand: OFF" : hand === "starting" ? "Hand: STARTING" : hand === "initializing" ? "Hand: INIT" : hand === "error" ? "Hand: ERROR" : `Hand: ${handStatus.toUpperCase()}`}</span>
+                      <span>{hand === "off" ? "Hand: OFF" : hand === "starting" ? "Hand: STARTING" : hand === "initializing" ? "Hand: INIT" : hand === "error" ? "Hand: N/A" : `Hand: ${handStatus.toUpperCase()}`}</span>
                     </div>
                     <span className={cn("h-2 w-2 rounded-full", {
                       "bg-success animate-pulse": hand === "on" && handStatus === "tracking",
@@ -557,8 +557,7 @@ export function BlockAR() {
                       "bg-brand-pink": hand === "on" && handStatus === "grabbing",
                       "bg-amber-400": hand === "on" && handStatus === "frozen",
                       "bg-yellow-400 animate-spin": hand === "on" && handStatus === "reacquiring",
-                      "bg-destructive": hand === "error",
-                      "bg-muted-foreground": hand === "off" || handStatus === "lost",
+                      "bg-muted-foreground": hand === "error" || hand === "off" || handStatus === "lost",
                     })} />
                   </div>
                   <div className="flex flex-col text-[8.5px] leading-tight text-muted-foreground">
@@ -566,7 +565,7 @@ export function BlockAR() {
                       {backendType}
                     </span>
                     <span>
-                      {hand === "off" ? "Tap to enable" : hand === "error" ? (handError?.slice(0, 140) || "Failed") : hand === "on" ? (handSeen ? "Hand detected" : "Looking for hand…") : "Please wait…"}
+                      {hand === "off" ? "Tap to enable" : hand === "error" ? "Unavailable — touch works fully" : hand === "on" ? (handSeen ? "Hand detected" : "Looking for hand…") : "Please wait…"}
                     </span>
                   </div>
                 </button>
