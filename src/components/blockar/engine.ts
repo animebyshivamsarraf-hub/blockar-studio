@@ -882,7 +882,7 @@ export function createEngine(o: EngineOpts) {
       try { xrAnchor?.delete?.(); } catch {}
       xrAnchor = null;
       lastHitResult = null;
-      hitSource = null; xrSession = null; xrReferenceSpace = null;
+      hitSource = null; xrSession = null; xrReferenceSpace = null; depthSupported = false; depthCloud.visible = false;
       xrHandSeen = false; xrHandFrozen = false; xrLastLocal = null; handWasPinching = false;
       if (pinchMarker) pinchMarker.visible = false;
       if (!preserveAnchorOnEnd) {
