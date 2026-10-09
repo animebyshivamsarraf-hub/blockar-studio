@@ -18,7 +18,7 @@ export type Backend = "NONE" | "WEBXR" | "MEDIAPIPE" | "DEMO";
 export type Side = "left" | "right";
 export type TrackStatus = "not detected" | "tracking" | "lost" | "reacquiring";
 
-export interface HandInfo { status: TrackStatus; pinch: PinchPhase; ratio: number; grabbing: boolean }
+export interface HandInfo { status: TrackStatus; pinch: PinchPhase; ratio: number; smoothRatio?: number; grabbing: boolean }
 export interface HandDiagnostics {
   system: SystemState;
   backend: Backend;
@@ -85,6 +85,7 @@ interface HandState {
   lastSeen: number;
   reacquire: number;
   ratio: number;
+  smoothRatio: number;
   depth: number | null;
   pinchPoint: THREE.Vector3;
 }
@@ -184,7 +185,7 @@ export class HandSystemRuntime {
       ring.visible = false;
       ring.renderOrder = 11;
       this.scene.add(ring);
-      return { side, skeleton, ring, pinch: new PinchStateMachine(), status: "not detected", lastSeen: 0, reacquire: 0, ratio: 1, depth: null, pinchPoint: new THREE.Vector3() };
+      return { side, skeleton, ring, pinch: new PinchStateMachine(), status: "not detected", lastSeen: 0, reacquire: 0, ratio: 1, smoothRatio: 1, depth: null, pinchPoint: new THREE.Vector3() };
     };
     this.hands = { left: mk("left"), right: mk("right") };
 
@@ -724,8 +725,14 @@ export class HandSystemRuntime {
 
     const palm = pts[0]!.distanceTo(pts[9]!) || 1e-3;
     h.ratio = pts[4]!.distanceTo(pts[8]!) / palm;
+    // EMA smoothing (alpha=0.4): reduces landmark jitter flicker that causes
+    // false pinch release/trigger on lighting/distance changes.
+    const EMA_ALPHA = 0.4;
+    h.smoothRatio = h.smoothRatio === 1 && h.ratio !== 1
+      ? h.ratio  // first real measurement: snap
+      : EMA_ALPHA * h.ratio + (1 - EMA_ALPHA) * h.smoothRatio;
     const prev = h.pinch.phase;
-    const phase = h.pinch.update(h.ratio);
+    const phase = h.pinch.update(h.smoothRatio);
 
     if (phase === "PINCHED" && prev === "PINCHING") {
       if (!this.owner && this.isNearCube(h, cam)) {
@@ -792,7 +799,7 @@ export class HandSystemRuntime {
     const now = performance.now();
     if (!force && now - this.lastEmit < 100) return;
     this.lastEmit = now;
-    const info = (h: HandState): HandInfo => ({ status: h.status, pinch: h.pinch.phase, ratio: h.ratio, grabbing: this.owner === h.side });
+    const info = (h: HandState): HandInfo => ({ status: h.status, pinch: h.pinch.phase, ratio: h.ratio, smoothRatio: h.smoothRatio, grabbing: this.owner === h.side });
     const labels: HandDiagnostics["labels"] = [];
     if (!this.renderer.xr.isPresenting) {
       for (const h of Object.values(this.hands)) {
