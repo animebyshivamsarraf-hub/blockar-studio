@@ -731,10 +731,13 @@ function animate(){
   renderer.render(scene,camera);
 }
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
-/* loading -> menu (instant loader already ran; just finish it) */
+/* loading -> DIRECT GAME (no menu in between) */
 window.__loadDone && window.__loadDone();
 window.__gameReady=true;
-setTimeout(()=>{ buildLevels(); show('menu'); }, 500);
+setTimeout(()=>{
+  // start directly at highest unlocked level
+  startLevel(Math.min(save.unlocked-1, LEVELS.length-1));
+}, 300);
 animate();
 </script>
 </body>
