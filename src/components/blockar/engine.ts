@@ -25,6 +25,7 @@ export interface EngineOpts {
   onChange: (info: { count: number; canUndo: boolean; canRedo: boolean }) => void;
   onHint: (h: string) => void;
   onHandStatus?: (status: "tracking" | "pinching" | "grabbing" | "lost" | "frozen" | "reacquiring", details?: any) => void;
+  onXREnd?: () => void;
 }
 
 export function createEngine(o: EngineOpts) {
@@ -76,61 +77,6 @@ export function createEngine(o: EngineOpts) {
   const sun = new THREE.DirectionalLight(0xffffff, 1.6);
   sun.position.set(1, 3, 2);
   scene.add(sun);
-
-  // Optional real-world depth scan. WebXR depth is device/browser dependent;
-  // these samples are a visual spatial guide, not a substitute for plane anchors.
-  const depthCloudGeometry = new THREE.BufferGeometry();
-  const depthCloudMaterial = new THREE.PointsMaterial({
-    color: 0x35eaff, size: 0.012, transparent: true, opacity: 0.62,
-    depthWrite: false, sizeAttenuation: true,
-  });
-  const depthCloud = new THREE.Points(depthCloudGeometry, depthCloudMaterial);
-  depthCloud.visible = false;
-  scene.add(depthCloud);
-  let depthSupported = false;
-  let lastDepthScan = 0;
-  let latestRoomDepth = 0;
-  let depthSampleCount = 0;
-  function scanXRDepth(frame: XRFrame) {
-    if (!xrSession || !xrReferenceSpace || !depthSupported) return;
-    const now = performance.now();
-    if (now - lastDepthScan < 180) return;
-    lastDepthScan = now;
-    try {
-      const viewerPose = frame.getViewerPose(xrReferenceSpace);
-      const view = viewerPose?.views?.[0];
-      if (!view || typeof (frame as any).getDepthInformation !== "function") return;
-      const info = (frame as any).getDepthInformation(view);
-      if (!info || typeof info.getDepthInMeters !== "function") return;
-      const points: number[] = [];
-      const projection = view.projectionMatrix;
-      const viewToWorld = new THREE.Matrix4().fromArray(view.transform.matrix);
-      // Coarse depth point cloud (9x9) to keep mobile GPU/CPU cost low.
-      for (let gy = 0; gy < 9; gy++) {
-        for (let gx = 0; gx < 9; gx++) {
-          const px = Math.min(info.width - 1, Math.max(0, Math.round((gx / 8) * (info.width - 1))));
-          const py = Math.min(info.height - 1, Math.max(0, Math.round((gy / 8) * (info.height - 1))));
-          const d = info.getDepthInMeters(px, py);
-          if (!Number.isFinite(d) || d < 0.15 || d > 8) continue;
-          const nx = (gx / 8) * 2 - 1;
-          const ny = 1 - (gy / 8) * 2;
-          const local = new THREE.Vector3(nx * d / projection[0]!, ny * d / projection[5]!, -d);
-          local.applyMatrix4(viewToWorld);
-          points.push(local.x, local.y, local.z);
-        }
-      }
-      if (points.length >= 3) {
-        depthCloudGeometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
-        depthCloudGeometry.computeBoundingSphere();
-        depthCloud.visible = true;
-        depthSampleCount = points.length / 3;
-        const center = info.getDepthInMeters(Math.floor(info.width / 2), Math.floor(info.height / 2));
-        if (Number.isFinite(center) && center > 0) latestRoomDepth = center;
-      }
-    } catch {
-      // Unsupported frame formats should never interrupt AR rendering/building.
-    }
-  }
 
   const root = new THREE.Group();
   scene.add(root);
@@ -481,11 +427,6 @@ export function createEngine(o: EngineOpts) {
 
   let xrSession: XRSession | null = null;
   let xrReferenceSpace: XRReferenceSpace | null = null;
-  // Persistent WebXR world anchor. When the browser/device supports anchors,
-  // this is the authoritative pose for the construction root. The root is
-  // never re-created from the camera after placement.
-  let xrAnchor: XRAnchor | null = null;
-  let lastHitResult: XRHitTestResult | null = null;
 
   // Genuine WebXR articulated-hand state. This is only active inside an XR session
   // that actually exposes hand-tracking; MediaPipe remains a separate fallback.
@@ -804,21 +745,11 @@ export function createEngine(o: EngineOpts) {
     if (!xr) throw new Error("WebXR not available");
     const session = await xr.requestSession("immersive-ar", {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay", "anchors", "hand-tracking", "local-floor", "depth-sensing"],
-      depthSensing: {
-        usagePreference: ["cpu-optimized", "gpu-optimized"],
-        dataFormatPreference: ["luminance-alpha", "float32"],
-      },
+      optionalFeatures: ["dom-overlay", "anchors", "hand-tracking", "local-floor"],
       domOverlay: { root: overlay },
     } as XRSessionInit);
     xrSession = session;
-    depthSupported = Boolean((session as any).depthUsage);
-    depthCloud.visible = false;
-    depthSampleCount = 0;
-    latestRoomDepth = 0;
     ensureXRHandVisuals();
-    if (depthSupported) o.onHint("ROOM DEPTH SCAN AVAILABLE — move phone slowly to scan");
-    else o.onHint("Room depth sensor unavailable — using AR surface tracking");
     // "local-floor" keeps y = 0 on the REAL floor. Plain "local" floats the
     // origin at wherever the phone happened to be when AR started.
     try { renderer.xr.setReferenceSpaceType("local-floor"); } catch { renderer.xr.setReferenceSpaceType("local"); }
@@ -828,7 +759,7 @@ export function createEngine(o: EngineOpts) {
     const viewer = await session.requestReferenceSpace("viewer");
     hitSource = (await session.requestHitTestSource?.({ space: viewer })) ?? null;
     grid.visible = false; anchored = false;
-    session.addEventListener("select", async () => {
+    session.addEventListener("select", () => {
       if (!reticle.visible) return;
       if (!anchored) {
         // The reticle already carries the real surface pose in scene/world space.
@@ -856,22 +787,9 @@ export function createEngine(o: EngineOpts) {
           root.quaternion.copy(anchorQuat);
         }
         root.updateMatrixWorld(true);
-        // Prefer a real XRAnchor when the AR implementation exposes it. The
-        // anchor is tied to the hit-test pose, not to the viewer/camera, so
-        // camera motion produces natural parallax while the coaster remains
-        // fixed to the same physical location.
-        xrAnchor = null;
-        try {
-          const candidate = lastHitResult as any;
-          if (candidate?.createAnchor) xrAnchor = await candidate.createAnchor();
-        } catch {
-          // Hit-test + local-floor is still a stable fallback when anchors are
-          // unavailable; never fake stability by moving the root with camera pose.
-          xrAnchor = null;
-        }
         reticle.visible = false;
         anchored = true; grid.visible = false;
-        o.onHint(`${xrAnchor ? "WORLD ANCHOR LOCKED" : "WORLD SPACE LOCKED"} — ${surfaceHit.surfaceType.toUpperCase()}`);
+        o.onHint(`ANCHOR LOCKED ON ${surfaceHit.surfaceType.toUpperCase()} — build stays in your room`);
       }
       // center-screen ray: face adjacency first
       const h = hitFrom(new THREE.Vector2(0, 0));
@@ -879,10 +797,7 @@ export function createEngine(o: EngineOpts) {
       if (mode === "track" && h.add) coaster.addPoint(...h.add); else if (mode === "build" && h.add) place(h.add); else if (mode !== "build") applyTool(h);
     });
     session.addEventListener("end", () => {
-      try { xrAnchor?.delete?.(); } catch {}
-      xrAnchor = null;
-      lastHitResult = null;
-      hitSource = null; xrSession = null; xrReferenceSpace = null; depthSupported = false; depthCloud.visible = false;
+      hitSource = null; xrSession = null; xrReferenceSpace = null;
       xrHandSeen = false; xrHandFrozen = false; xrLastLocal = null; handWasPinching = false;
       if (pinchMarker) pinchMarker.visible = false;
       if (!preserveAnchorOnEnd) {
@@ -891,6 +806,10 @@ export function createEngine(o: EngineOpts) {
       }
       preserveAnchorOnEnd = false;
       grid.visible = false; placeCam();
+      // State cleanup: wait for browser hardware camera lock release (150ms),
+      // then notify React layer so MediaPipe can re-acquire the camera.
+      // This prevents the "HAND: ERROR" stuck state after AR exit.
+      setTimeout(() => { o.onXREnd?.(); }, 150);
     });
 
   }
@@ -937,11 +856,7 @@ export function createEngine(o: EngineOpts) {
   renderer.setAnimationLoop((_t, frame?: XRFrame) => {
     const mode = o.getMode();
     const now = performance.now();
-    if (frame && xrSession) {
-      updateXRHand(frame);
-      scanXRDepth(frame);
-    }
-    const dt = Math.min((now - lastT) / 1000, 0.05); lastT = now;
+    if (frame && xrSession) updateXRHand(frame); const dt = Math.min((now - lastT) / 1000, 0.05); lastT = now;
     coaster.step(dt);
     if (coaster.isRiding() && pov && !renderer.xr.isPresenting) {
       coaster.povPose(povPose);
@@ -951,7 +866,6 @@ export function createEngine(o: EngineOpts) {
     }
     if (frame && hitSource && !anchored) {
       const res = frame.getHitTestResults(hitSource);
-      lastHitResult = res.length ? res[0] : null;
       const ref = renderer.xr.getReferenceSpace();
       if (res.length && ref) {
         const pose = res[0].getPose(ref);
@@ -962,18 +876,6 @@ export function createEngine(o: EngineOpts) {
           reticle.visible = true;
         }
       } else reticle.visible = false;
-    } else if (frame && xrAnchor && xrReferenceSpace) {
-      // Once placed, follow ONLY the persistent XR anchor pose. Never derive
-      // the world root from the current viewer/camera pose.
-      const anchorPose = frame.getPose(xrAnchor.anchorSpace, xrReferenceSpace);
-      if (anchorPose) {
-        tmpM.fromArray(anchorPose.transform.matrix);
-        root.position.setFromMatrixPosition(tmpM);
-        root.quaternion.setFromRotationMatrix(tmpM);
-        root.updateMatrixWorld(true);
-      }
-      reticle.visible = false;
-      selBox.visible = false;
     } else {
       const h = hitFrom(new THREE.Vector2(0, 0));
       if ((mode === "build" || mode === "track") && h.add) {
@@ -1019,9 +921,6 @@ export function createEngine(o: EngineOpts) {
       apply(chs, "next"); commit(chs);
     },
     startXR,
-    getRoomDepthStatus() {
-      return { supported: depthSupported, nearestMeters: latestRoomDepth, sampleCount: depthSampleCount };
-    },
     coaster,
     setPOV(on: boolean) { pov = on; if (!on) { coaster.showFront(); placeCam(); } },
     undo() { const a = undo.pop(); if (a) { apply(a, "prev"); redo.push(a); emit(); } },

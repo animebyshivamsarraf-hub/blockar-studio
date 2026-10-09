@@ -73,7 +73,6 @@ export function BlockAR() {
   const [handStatus, setHandStatus] = useState<"tracking" | "pinching" | "grabbing" | "lost" | "frozen" | "reacquiring" | "error">("lost");
   const [capability, setCapability] = useState<CapabilityReport | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
-  const [roomDepth, setRoomDepth] = useState<{ supported: boolean; nearestMeters: number; sampleCount: number }>({ supported: false, nearestMeters: 0, sampleCount: 0 });
   const lastStatusUpdate = useRef<number>(0);
   const pendingStatus = useRef<string | null>(null);
 
@@ -123,18 +122,21 @@ export function BlockAR() {
       onChange: setInfo,
       onHint: setHint,
       onHandStatus: (status) => setDebouncedHandStatus(status),
+      onXREnd: () => {
+        // XR session ended and camera lock released (150ms elapsed in engine).
+        // Clear any stuck hand error state so MediaPipe can restart cleanly.
+        setHandError(null);
+        setHand((prev) => {
+          if (prev === "error") {
+            setToast("AR exited — tap Hand Control to restart hand tracking");
+            return "off";
+          }
+          return prev;
+        });
+      },
     });
     engine.current = e;
-    const depthPoll = window.setInterval(() => {
-      const status = e.getRoomDepthStatus?.();
-      if (status) setRoomDepth(status);
-    }, 500);
-    return () => {
-      window.clearInterval(depthPoll);
-      e.dispose();
-      engine.current = null;
-      setRoomDepth({ supported: false, nearestMeters: 0, sampleCount: 0 });
-    };
+    return () => { e.dispose(); engine.current = null; };
   }, [stage]);
 
   useEffect(() => {
@@ -201,14 +203,17 @@ export function BlockAR() {
   async function enterXR() {
     if (!engine.current || !overlayRef.current) return;
 
-    // WebXR immersive AR owns the device camera/compositor. If MediaPipe is
-    // currently using getUserMedia, stop that pipeline first instead of
-    // blocking the AR transition or allowing two camera owners to fight.
-    if (handRuntime.current || streamRef.current) {
-      stopHands.current?.();
-      stopHands.current = null;
-      handRuntime.current?.dispose?.();
-      handRuntime.current = null;
+    const isMobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+    const handsActive = hand === "on" && !!handRuntime.current;
+
+    // On phones, immersive-ar and getUserMedia may need exclusive access to
+    // the same rear camera. Keeping MediaPipe alive while starting WebXR can
+    // leave the DOM video frozen, which makes MediaPipe report HAND: LOST.
+    // Never enter this conflicting state. Users can keep hand control in the
+    // rear-camera mode, or turn it off before starting true WebXR AR.
+    if (isMobile && handsActive) {
+      setToast("Hand Control is active — turn it off before starting Room AR");
+      return;
     }
 
     // If a normal rear-camera stream is open, release it BEFORE requesting
@@ -290,23 +295,10 @@ export function BlockAR() {
       return;
     }
 
-    // On Android immersive WebXR normally owns the camera. A DOM
-    // getUserMedia stream cannot safely read the same XR camera, so never start
-    // MediaPipe inside immersive AR unless native XR hand joints are available.
-    // This prevents the old camera-freeze/hand-lost loop and keeps the AR world
-    // genuinely room-locked. Exit AR to use the MediaPipe camera fallback.
-    if (e0?.isXR()) {
-      setBackendType("MEDIAPIPE FALLBACK");
-      setHand("error");
-      setHandError("This AR session owns the camera. MediaPipe camera hands are available after exiting AR; native WebXR hand tracking is used when the device exposes it.");
-      setDebouncedHandStatus("lost");
-      setToast(e0.xrHandCount() > 0
-        ? "WebXR hands available — use pinch in AR"
-        : "Stable Room AR active. Exit AR for camera-based hand tracking on this device.");
-      return;
-    }
-
-    // Non-XR phone mode: MediaPipe reads the rear camera.
+    // Phones: WebXR AR exposes no hand joints, so MediaPipe reads the camera.
+    // We keep the AR session (and therefore the real-world anchor) alive if the
+    // camera can be shared; only if the OS refuses do we leave AR, and even
+    // then the anchored construction root keeps its real-world pose.
     setBackendType("MEDIAPIPE FALLBACK");
     try {
       let activeStream = streamRef.current;
@@ -509,7 +501,7 @@ export function BlockAR() {
       {camOk && <video ref={videoRef} playsInline muted className="absolute inset-0 h-full w-full object-cover" />}
       {!camOk && <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_70%,var(--glow),transparent_65%)]" />}
       {stage === "build" && <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />}
-      <canvas ref={handCanvas} className="pointer-events-none absolute inset-0 h-full w-full mix-blend-screen" />
+      <canvas ref={handCanvas} className="pointer-events-none absolute inset-0 h-full w-full" />
       {handLabels.map((l) => (
         <div key={l.side} className="pointer-events-none absolute -translate-x-1/2 rounded-full border border-success/60 bg-background/60 px-2 py-0.5 text-[10px] font-bold tracking-wider text-success" style={{ left: l.x, top: l.y - 38 }}>{l.text}</div>
       ))}
@@ -592,21 +584,6 @@ export function BlockAR() {
                 <Camera className="h-4 w-4" />
                 <span>{camOk ? "Back camera" : "Camera off"}</span>
                 <span className={cn("h-2 w-2 rounded-full", camOk ? "bg-success" : "bg-muted-foreground")} />
-              </div>
-              <div className="hud flex max-w-[190px] items-center gap-2 px-3 py-2 text-[10px]">
-                <ScanLine className={cn("h-4 w-4 shrink-0", roomDepth.supported && roomDepth.sampleCount > 0 ? "text-brand-cyan" : "text-muted-foreground")} />
-                <div className="min-w-0">
-                  <div className="font-semibold">{roomDepth.supported ? "ROOM DEPTH" : "DEPTH SENSOR CHECK"}</div>
-                  <div className="text-muted-foreground">
-                    {roomDepth.supported
-                      ? roomDepth.sampleCount > 0
-                        ? roomDepth.sampleCount + " points · center " + roomDepth.nearestMeters.toFixed(2) + " m"
-                        : "Sensor ready · scan room slowly"
-                      : engine.current?.isXR()
-                        ? "Not exposed by this device"
-                        : "Start Room AR to check"}
-                  </div>
-                </div>
               </div>
               {xrOk && !engine.current?.isXR() && (
                 <button onClick={enterXR} className="pointer-events-auto rounded-xl bg-success px-3 py-2 text-xs font-semibold text-background">Start WebXR AR</button>
