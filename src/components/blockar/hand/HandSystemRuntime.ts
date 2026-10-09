@@ -286,17 +286,22 @@ export class HandSystemRuntime {
     // On phones this keeps WASM/GPU inference away from the camera + Three.js
     // main thread, which is the important difference from detectAsync alone.
     if (isPhone) {
+      // Keep all vision inference off the UI/render thread on phones. The
+      // synchronous CPU fallback can block the same thread that handles touch
+      // input and the Three.js render loop, making the whole builder appear
+      // frozen. If the worker cannot initialize, fail clearly and leave the
+      // main BlockAR canvas/touch controls running.
       this.mpIntervalMs = MP_INTERVAL_CPU_MS;
+      let startupTimer = 0;
       try {
-        // Prefer worker inference, but do not leave mobile users stuck forever
-        // if a browser blocks the worker/WASM startup. Fall back to CPU on the
-        // main thread at a deliberately low frame rate.
         await Promise.race([
           this.startMediaPipeWorker(generation),
-          new Promise<never>((_, reject) => window.setTimeout(
-            () => reject(new Error("Hand worker startup timed out; switching to CPU fallback")),
-            25000,
-          )),
+          new Promise<never>((_, reject) => {
+            startupTimer = window.setTimeout(
+              () => reject(new Error("Hand tracking worker did not start in 25 seconds. Touch controls remain available; tap Hand Control to retry.")),
+              25000,
+            );
+          }),
         ]);
       } catch (workerError) {
         if (generation !== this.mpGeneration) throw workerError;
@@ -305,28 +310,10 @@ export class HandSystemRuntime {
         this.workerReady = false;
         this.workerBusy = false;
         this.workerRestarting = false;
-        this.session = "camera live · main-thread CPU fallback";
-        const { FilesetResolver, HandLandmarker } = await import("@mediapipe/tasks-vision");
-        const fileset = await FilesetResolver.forVisionTasks(getWasmUrl());
-        this.landmarker = await Promise.race([
-          HandLandmarker.createFromOptions(fileset, {
-            baseOptions: { modelAssetPath: getModelUrl(), delegate: "CPU" },
-            runningMode: "LIVE_STREAM",
-            numHands: 2,
-            minHandDetectionConfidence: 0.5,
-            minHandPresenceConfidence: 0.5,
-            minTrackingConfidence: 0.5,
-            resultCallback: (res: any) => {
-              if (generation !== this.mpGeneration || !this.stream) return;
-              this.consumeMediaPipeResult(res, this.video);
-            },
-          }),
-          new Promise<never>((_, reject) => window.setTimeout(
-            () => reject(new Error("MediaPipe CPU fallback timed out. Use touch controls or retry.")),
-            30000,
-          )),
-        ]);
-        this.error = null;
+        this.session = "camera live · touch controls available";
+        throw workerError;
+      } finally {
+        if (startupTimer) window.clearTimeout(startupTimer);
       }
       this.resetCube();
       return;
