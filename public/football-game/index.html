@@ -212,12 +212,13 @@ function persist(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify(save)); }
 
 /* ================= LEVELS ================= */
 const LEVELS = [
-  { name:'First Basket',  desc:'Close & easy',  shots:5, target:3, spot:0, wind:0,   assist:.55 },
-  { name:'Practice',      desc:'A bit further', shots:5, target:3, spot:1, wind:0,   assist:.50 },
-  { name:'Long Shot',     desc:'From distance', shots:6, target:4, spot:2, wind:0,   assist:.40 },
-  { name:'Precision',     desc:'Narrow window', shots:6, target:4, spot:3, wind:0,   assist:.32 },
-  { name:'Wind Challenge',desc:'Watch the wind',shots:7, target:4, spot:2, wind:1.4, assist:.30 },
-  { name:'Master',        desc:'Wind + far',    shots:8, target:5, spot:3, wind:2.0, assist:.25 },
+  { name:'First Basket',  desc:'Close & easy',  shots:5, target:3, spot:0, wind:0,   assist:.55, grav:12.5 },
+  { name:'Practice',      desc:'A bit further', shots:5, target:3, spot:1, wind:0,   assist:.50, grav:12.5 },
+  { name:'Long Shot',     desc:'From distance', shots:6, target:4, spot:2, wind:0,   assist:.40, grav:12.5 },
+  { name:'Precision',     desc:'Narrow window', shots:6, target:4, spot:3, wind:0,   assist:.32, grav:12.5 },
+  { name:'Wind Challenge',desc:'Watch the wind',shots:7, target:4, spot:2, wind:1.4, assist:.30, grav:12.5 },
+  { name:'Master',        desc:'Wind + far',    shots:8, target:5, spot:3, wind:2.0, assist:.25, grav:12.5 },
+  { name:'🌙 Anti-Gravity',desc:'Moon physics!',shots:8, target:4, spot:1, wind:0.8, assist:.35, grav:4.5, space:true },
 ];
 const SPOTS = [ {x:0,z:-5.5}, {x:-2.5,z:-6.5}, {x:2.5,z:-8}, {x:0,z:-9.5} ];
 
@@ -409,47 +410,27 @@ function buildFallbackUpper(){
   playerInner.userData.arms=[aL,aR];
 }
 buildLowerBody();
-/* chunked model URLs (assembled in-browser to bypass single-request limits) */
-const CHAR_CHUNKS=[]; // filled at deploy: N chunk URLs
-const CHAR_DIRECT='https://muse.ai/files/1309069215631594/1462915465938091/oprmaaxn1xwwbed5ts7jv6vz/character_small.glb';
-function assembleModel(buf){
-  const blob=new Blob([buf],{type:'model/gltf-binary'});
-  const url=URL.createObjectURL(blob);
-  new GLTFLoader().load(url,(gltf)=>{
-    charModel=gltf.scene;
-    const s=0.485; charModel.scale.setScalar(s);
-    charModel.rotation.y=Math.PI; // face -> +z
-    charModel.position.y=0.85+1.0*s;
-    charModel.traverse(o=>{if(o.isMesh)o.castShadow=true;});
-    playerInner.add(charModel); charLoaded=true; URL.revokeObjectURL(url);
-    document.getElementById('char-note').innerHTML='Your original 3D model loaded!<br><b>Face preserved — sem to sem! ✅</b>';
-  },undefined,()=>{ buildFallbackUpper(); noteFallback(); });
+/* character model URLs — user's original scan, face sem-to-sem.
+   1) same-origin (baked into deployment at build time) 2) hosted copy */
+const CHAR_URLS=[
+  '/models/character.glb',
+  'https://muse.ai/files/1309069215631594/1462915465938091/oprmaaxn1xwwbed5ts7jv6vz/character_small.glb'
+];
+function showModel(gltf){
+  charModel=gltf.scene;
+  const s=0.485; charModel.scale.setScalar(s);
+  charModel.rotation.y=Math.PI; // face -> +z
+  charModel.position.y=0.85+1.0*s;
+  charModel.traverse(o=>{if(o.isMesh)o.castShadow=true;});
+  playerInner.add(charModel); charLoaded=true;
+  document.getElementById('char-note').innerHTML='Your original 3D model loaded!<br><b>Face preserved — sem to sem! ✅</b>';
 }
 function noteFallback(){ document.getElementById('char-note').innerHTML='Model loading... showing preview body.<br>Original model will appear when fully loaded.'; }
-async function loadCharacter(){
-  // 1) try chunked parts (permanent, same-origin)
-  if(CHAR_CHUNKS.length){
-    try{
-      const parts=[];
-      for(const u of CHAR_CHUNKS){
-        const r=await fetch(u); if(!r.ok) throw 0;
-        parts.push(new Uint8Array(await r.arrayBuffer()));
-      }
-      const total=parts.reduce((a,p)=>a+p.length,0);
-      const buf=new Uint8Array(total); let o=0;
-      for(const p of parts){ buf.set(p,o); o+=p.length; }
-      assembleModel(buf); return;
-    }catch(e){/* fall through */}
-  }
-  // 2) try direct hosted copy
-  try{
-    const r=await fetch(CHAR_DIRECT); if(!r.ok) throw 0;
-    assembleModel(new Uint8Array(await r.arrayBuffer())); return;
-  }catch(e){}
-  // 3) fallback body
-  buildFallbackUpper();
+function tryCharUrl(i){
+  if(i>=CHAR_URLS.length){ buildFallbackUpper(); return; }
+  new GLTFLoader().load(CHAR_URLS[i],showModel,undefined,()=>tryCharUrl(i+1));
 }
-loadCharacter();
+tryCharUrl(0);
 /* character preview screen (separate mini scene) */
 let charPrevInit=false;
 function initCharPreview(){
@@ -472,11 +453,17 @@ function initCharPreview(){
     const leg=new THREE.Mesh(new THREE.CapsuleGeometry(0.11,0.34,4,10),pajama); leg.position.set(x,0.27,0); tmpInner.add(leg);
     const sh=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.1,0.3),new THREE.MeshStandardMaterial({color:0x4a3220})); sh.position.set(x,0.05,0.05); tmpInner.add(sh);
   });
-  new GLTFLoader().load(CHAR_DIRECT,(gltf)=>{
+  new GLTFLoader().load('/models/character.glb',(gltf)=>{
     const m=gltf.scene; m.scale.setScalar(0.485); m.rotation.y=Math.PI; m.position.y=0.85+0.485;
     tmpInner.add(m);
     document.getElementById('char-note').innerHTML='Your original 3D model!<br><b>Face preserved — sem to sem! ✅</b>';
-  },undefined,()=>{});
+  },undefined,()=>{
+    new GLTFLoader().load(CHAR_URLS[1],(gltf)=>{
+      const m=gltf.scene; m.scale.setScalar(0.485); m.rotation.y=Math.PI; m.position.y=0.85+0.485;
+      tmpInner.add(m);
+      document.getElementById('char-note').innerHTML='Your original 3D model!<br><b>Face preserved — sem to sem! ✅</b>';
+    });
+  });
   (function loop(){
     requestAnimationFrame(loop);
     if(!document.getElementById('scr-char').classList.contains('show')) return void setTimeout(loop,500);
@@ -488,7 +475,7 @@ function initCharPreview(){
 }
 
 /* ================= GAME STATE ================= */
-const G=12.5;
+let GRAV=12.5;
 let lvlIdx=0, L=LEVELS[0];
 let score=0, shotsUsed=0, baskets=0, streak=0, bestStreak=0;
 let ballState='held', vel=new THREE.Vector3(), spin=new THREE.Vector3();
@@ -517,11 +504,30 @@ function updHUD(){
 function startLevel(i){
   lvlIdx=i; L=LEVELS[i];
   score=0; shotsUsed=0; baskets=0; streak=0; bestStreak=0;
+  GRAV=L.grav||12.5;
   wind=L.wind!==0 ? (Math.random()*2-1)*L.wind : 0;
   wind=Math.round(wind*10)/10;
+  setSpaceTheme(!!L.space);
   placePlayer(); resetBall(); updHUD(); show('game'); paused=false;
   $('aim-hint').classList.remove('hide');
-  shotMsg('LEVEL '+(i+1), L.name+' — target: '+L.target+' baskets!', 1600);
+  shotMsg(L.space?'🌙 ANTI-GRAVITY!':'LEVEL '+(i+1), L.name+' — target: '+L.target+' baskets!', 1600);
+}
+/* space theme for anti-gravity level */
+let stars=null;
+function setSpaceTheme(on){
+  if(on && !stars){
+    const g=new THREE.BufferGeometry(), pos=[];
+    for(let i=0;i<600;i++){
+      const a=Math.random()*Math.PI*2, r=40+Math.random()*40, y=Math.random()*50-5;
+      pos.push(Math.cos(a)*r, y, Math.sin(a)*r-10);
+    }
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+    stars=new THREE.Points(g, new THREE.PointsMaterial({color:0xffffff,size:0.35,transparent:true,opacity:.9}));
+    scene.add(stars);
+  }
+  if(stars) stars.visible=on;
+  scene.background.set(on?0x020208:0x0b1020);
+  scene.fog.color.set(on?0x020208:0x0b1020);
 }
 function shotMsg(big,sub,ms=1400,cls=''){
   const m=$('shot-msg');
@@ -536,7 +542,7 @@ let trajLine=null;
 function showTraj(v0){
   clearTraj();
   const pts=[],p=ball.pos.clone(),v=v0.clone(),dt=1/30;
-  for(let i=0;i<45;i++){ v.y-=G*dt; v.x+=wind*dt; p.addScaledVector(v,dt); if(p.y<BALL_R)break; pts.push(p.clone()); }
+  for(let i=0;i<45;i++){ v.y-=GRAV*dt; v.x+=wind*dt; p.addScaledVector(v,dt); if(p.y<BALL_R)break; pts.push(p.clone()); }
   trajLine=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
     new THREE.LineDashedMaterial({color:0x7fd0ff,dashSize:.18,gapSize:.12,transparent:true,opacity:.9}));
   trajLine.computeLineDistances(); scene.add(trajLine);
@@ -570,7 +576,7 @@ function releaseShot(){
   const aimDir=aimVec.clone(); aimDir.y=0; aimDir.normalize();
   if(aimDir.dot(toHoop)>0.25){
     const T=0.55+distH*0.055;
-    const ideal=new THREE.Vector3((HOOP.x-ball.pos.x)/T,((HOOP.rimY-ball.pos.y)+0.5*G*T*T)/T,(HOOP.z-ball.pos.z)/T);
+    const ideal=new THREE.Vector3((HOOP.x-ball.pos.x)/T,((HOOP.rimY-ball.pos.y)+0.5*GRAV*T*T)/T,(HOOP.z-ball.pos.z)/T);
     vel.copy(aimVec).lerp(ideal,assist);
     vel.x+=(Math.random()-0.5)*0.7; vel.z+=(Math.random()-0.5)*0.7;
   } else vel.copy(aimVec);
@@ -591,7 +597,7 @@ $('btn-quit').addEventListener('click',()=>{beep(500,.06);paused=false;buildLeve
 /* ================= PHYSICS ================= */
 function stepPhysics(dt){
   if(ballState!=='flying'||paused)return;
-  prevY=ball.pos.y; vel.y-=G*dt; vel.x+=wind*dt;
+  prevY=ball.pos.y; vel.y-=GRAV*dt; vel.x+=wind*dt;
   ball.pos.addScaledVector(vel,dt);
   ballMesh.rotation.x+=spin.x*dt; ballMesh.rotation.y+=spin.y*dt;
   const p=ball.pos;
