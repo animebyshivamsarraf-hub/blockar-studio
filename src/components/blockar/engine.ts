@@ -517,7 +517,7 @@ export function createEngine(o: EngineOpts) {
       xrHandSeen = false;
       hideSpatialGuide();
 
-      if ((grabController.active || activeHandStroke) && now - (handSeenAt || 0) > XR_HAND_LOST_GRACE_MS) {
+      if (!xrHandFrozen && (grabController.active || activeHandStroke) && now - (handSeenAt || 0) > XR_HAND_LOST_GRACE_MS) {
         xrHandFrozen = true;
         grabController.freeze();
         o.onHandStatus?.("frozen");
