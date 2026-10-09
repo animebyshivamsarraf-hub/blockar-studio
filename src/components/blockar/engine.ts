@@ -349,7 +349,12 @@ export function createEngine(o: EngineOpts) {
     if (pointers.size === 2 && drag.kind === "orbit") {
       const [a, b] = [...pointers.values()];
       const d = Math.hypot(a.x - b.x, a.y - b.y);
-      orbit.r = THREE.MathUtils.clamp(orbit.r * (pinchDist / d), 0.4, 4);
+      // Two touch points can briefly coincide on mobile browsers. Avoid
+      // dividing by zero (which would set orbit.r to Infinity/NaN and make
+      // the 3D scene appear permanently frozen until reload).
+      if (d > 0 && pinchDist > 0 && Number.isFinite(d) && Number.isFinite(pinchDist)) {
+        orbit.r = THREE.MathUtils.clamp(orbit.r * (pinchDist / d), 0.4, 4);
+      }
       pinchDist = d;
       const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
       orbit.yaw -= (cx - drag.x) * 0.008; orbit.pitch = THREE.MathUtils.clamp(orbit.pitch + (cy - drag.y) * 0.006, 0.15, 1.45);
