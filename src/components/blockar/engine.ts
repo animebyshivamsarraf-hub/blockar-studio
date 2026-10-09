@@ -523,7 +523,7 @@ export function createEngine(o: EngineOpts) {
         o.onHandStatus?.("frozen");
         o.onHint("HAND LOST — CONSTRUCTION FROZEN");
         deviceTelemetry.log("hand_lost", { time: now });
-      } else if (!grabController.active) {
+      } else if (!grabController.active && !xrHandFrozen) {
         o.onHandStatus?.("lost");
       }
       return;
