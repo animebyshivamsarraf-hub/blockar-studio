@@ -77,6 +77,61 @@ export function createEngine(o: EngineOpts) {
   sun.position.set(1, 3, 2);
   scene.add(sun);
 
+  // Optional real-world depth scan. WebXR depth is device/browser dependent;
+  // these samples are a visual spatial guide, not a substitute for plane anchors.
+  const depthCloudGeometry = new THREE.BufferGeometry();
+  const depthCloudMaterial = new THREE.PointsMaterial({
+    color: 0x35eaff, size: 0.012, transparent: true, opacity: 0.62,
+    depthWrite: false, sizeAttenuation: true,
+  });
+  const depthCloud = new THREE.Points(depthCloudGeometry, depthCloudMaterial);
+  depthCloud.visible = false;
+  scene.add(depthCloud);
+  let depthSupported = false;
+  let lastDepthScan = 0;
+  let latestRoomDepth = 0;
+  let depthSampleCount = 0;
+  function scanXRDepth(frame: XRFrame) {
+    if (!xrSession || !xrReferenceSpace || !depthSupported) return;
+    const now = performance.now();
+    if (now - lastDepthScan < 180) return;
+    lastDepthScan = now;
+    try {
+      const viewerPose = frame.getViewerPose(xrReferenceSpace);
+      const view = viewerPose?.views?.[0];
+      if (!view || typeof (frame as any).getDepthInformation !== "function") return;
+      const info = (frame as any).getDepthInformation(view);
+      if (!info || typeof info.getDepthInMeters !== "function") return;
+      const points: number[] = [];
+      const projection = view.projectionMatrix;
+      const viewToWorld = new THREE.Matrix4().fromArray(view.transform.matrix);
+      // Coarse depth point cloud (9x9) to keep mobile GPU/CPU cost low.
+      for (let gy = 0; gy < 9; gy++) {
+        for (let gx = 0; gx < 9; gx++) {
+          const px = Math.min(info.width - 1, Math.max(0, Math.round((gx / 8) * (info.width - 1))));
+          const py = Math.min(info.height - 1, Math.max(0, Math.round((gy / 8) * (info.height - 1))));
+          const d = info.getDepthInMeters(px, py);
+          if (!Number.isFinite(d) || d < 0.15 || d > 8) continue;
+          const nx = (gx / 8) * 2 - 1;
+          const ny = 1 - (gy / 8) * 2;
+          const local = new THREE.Vector3(nx * d / projection[0]!, ny * d / projection[5]!, -d);
+          local.applyMatrix4(viewToWorld);
+          points.push(local.x, local.y, local.z);
+        }
+      }
+      if (points.length >= 3) {
+        depthCloudGeometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+        depthCloudGeometry.computeBoundingSphere();
+        depthCloud.visible = true;
+        depthSampleCount = points.length / 3;
+        const center = info.getDepthInMeters(Math.floor(info.width / 2), Math.floor(info.height / 2));
+        if (Number.isFinite(center) && center > 0) latestRoomDepth = center;
+      }
+    } catch {
+      // Unsupported frame formats should never interrupt AR rendering/building.
+    }
+  }
+
   const root = new THREE.Group();
   scene.add(root);
   const grid = new THREE.GridHelper(4, 40, 0x3ee8ff, 0x2a6a80);
@@ -749,11 +804,21 @@ export function createEngine(o: EngineOpts) {
     if (!xr) throw new Error("WebXR not available");
     const session = await xr.requestSession("immersive-ar", {
       requiredFeatures: ["hit-test"],
-      optionalFeatures: ["dom-overlay", "anchors", "hand-tracking", "local-floor"],
+      optionalFeatures: ["dom-overlay", "anchors", "hand-tracking", "local-floor", "depth-sensing"],
+      depthSensing: {
+        usagePreference: ["cpu-optimized", "gpu-optimized"],
+        dataFormatPreference: ["luminance-alpha", "float32"],
+      },
       domOverlay: { root: overlay },
     } as XRSessionInit);
     xrSession = session;
+    depthSupported = Boolean((session as any).depthUsage);
+    depthCloud.visible = false;
+    depthSampleCount = 0;
+    latestRoomDepth = 0;
     ensureXRHandVisuals();
+    if (depthSupported) o.onHint("ROOM DEPTH SCAN AVAILABLE — move phone slowly to scan");
+    else o.onHint("Room depth sensor unavailable — using AR surface tracking");
     // "local-floor" keeps y = 0 on the REAL floor. Plain "local" floats the
     // origin at wherever the phone happened to be when AR started.
     try { renderer.xr.setReferenceSpaceType("local-floor"); } catch { renderer.xr.setReferenceSpaceType("local"); }
@@ -872,7 +937,11 @@ export function createEngine(o: EngineOpts) {
   renderer.setAnimationLoop((_t, frame?: XRFrame) => {
     const mode = o.getMode();
     const now = performance.now();
-    if (frame && xrSession) updateXRHand(frame); const dt = Math.min((now - lastT) / 1000, 0.05); lastT = now;
+    if (frame && xrSession) {
+      updateXRHand(frame);
+      scanXRDepth(frame);
+    }
+    const dt = Math.min((now - lastT) / 1000, 0.05); lastT = now;
     coaster.step(dt);
     if (coaster.isRiding() && pov && !renderer.xr.isPresenting) {
       coaster.povPose(povPose);
@@ -950,6 +1019,9 @@ export function createEngine(o: EngineOpts) {
       apply(chs, "next"); commit(chs);
     },
     startXR,
+    getRoomDepthStatus() {
+      return { supported: depthSupported, nearestMeters: latestRoomDepth, sampleCount: depthSampleCount };
+    },
     coaster,
     setPOV(on: boolean) { pov = on; if (!on) { coaster.showFront(); placeCam(); } },
     undo() { const a = undo.pop(); if (a) { apply(a, "prev"); redo.push(a); emit(); } },
