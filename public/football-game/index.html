@@ -150,7 +150,7 @@ const COURT_W = 14, COURT_L = 30;
 }
 
 /* ============ HOOP (basket) ============ */
-const HOOP = { x:0, rimY:3.05, z:-13, rimR:0.36, boardZ:-13.45 };
+const HOOP = { x:0, rimY:3.05, z:-13, rimR:0.42, boardZ:-13.45 };
 const hoopGroup = new THREE.Group();
 {
   const steel = new THREE.MeshStandardMaterial({ color:0x8a93a6, metalness:.8, roughness:.35 });
@@ -247,7 +247,7 @@ const player = new THREE.Group();
   armL.rotation.z =  0.5; armR.rotation.z = -0.5; armL.rotation.x = armR.rotation.x = -0.7;
   player.userData.arms = [armL, armR];
 }
-const SHOOT_SPOTS = [ {x:0,z:-4.5}, {x:-2.5,z:-6}, {x:2.5,z:-7.5}, {x:0,z:-9} ];
+const SHOOT_SPOTS = [ {x:0,z:-5.5}, {x:-2.5,z:-6.5}, {x:2.5,z:-8}, {x:0,z:-9.5} ];
 let spotIdx = 0;
 function placePlayer(){
   const s = SHOOT_SPOTS[spotIdx % SHOOT_SPOTS.length];
@@ -389,7 +389,26 @@ function release(){
   clearTrajectory();
   if(ballState !== 'held') return;
   if(aimVec.lengthSq() < 9){ aimVec.set(0,0,0); return; } // just a tap — cancel
-  vel.copy(aimVec);
+  // SMART AIM ASSIST (like real mobile sports games):
+  // compute the perfect velocity to hit the hoop, then blend player's aim toward it.
+  // Good aims get corrected -> scores feel earned. Wild shots stay wild. Hard stays hard.
+  const assist = [0.55, 0.5, 0.4, 0.32, 0.25][Math.min(level-1, 4)];
+  const toHoop = new THREE.Vector3(HOOP.x-ball.position.x, 0, HOOP.z-ball.position.z);
+  const distH = toHoop.length(); toHoop.normalize();
+  const aimDir = aimVec.clone(); aimDir.y = 0; aimDir.normalize();
+  if(aimDir.dot(toHoop) > 0.25){
+    const T = 0.55 + distH*0.055;                 // ideal flight time
+    const ideal = new THREE.Vector3(
+      (HOOP.x-ball.position.x)/T,
+      ((HOOP.rimY-ball.position.y) + 0.5*G*T*T)/T,
+      (HOOP.z-ball.position.z)/T
+    );
+    vel.copy(aimVec).lerp(ideal, assist);
+    vel.x += (Math.random()-0.5)*0.7;             // tiny human wobble
+    vel.z += (Math.random()-0.5)*0.7;
+  } else {
+    vel.copy(aimVec);
+  }
   spin.set(Math.random()*8-4, Math.random()*6-3, Math.random()*8-4);
   ballState = 'flying';
   scoredThisFlight = false;
