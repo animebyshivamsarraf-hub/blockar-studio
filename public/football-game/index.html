@@ -28,7 +28,10 @@
   #target { position:fixed; top:102px; left:0; right:0; text-align:center; z-index:10; pointer-events:none; font-size:12px; font-weight:600; color:#ffd54a; text-shadow:0 2px 8px rgba(0,0,0,.6); letter-spacing:.5px; }
 </style>
 <script type="importmap">
-{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
 </script>
 </head>
 <body>
@@ -48,6 +51,7 @@
 
 <script type="module">
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 /* ============ RENDERER / SCENE ============ */
 const container = document.getElementById('game');
@@ -228,25 +232,68 @@ scene.add(ball);
 const trail = [];
 const trailMat = new THREE.MeshBasicMaterial({ color:0x6ac8ff, transparent:true, opacity:.5 });
 
-/* ============ PLAYER (stylised) ============ */
+/* ============ PLAYER (3D scan character + procedural lower body) ============ */
 const player = new THREE.Group();
-{
+const playerInner = new THREE.Group();   // lean/bob animation goes here
+player.add(playerInner);
+let charLoaded = false;
+
+function buildFallbackPlayer(){
   const skin = new THREE.MeshStandardMaterial({ color:0xd9a066, roughness:.7 });
   const shirt = new THREE.MeshStandardMaterial({ color:0x2277dd, roughness:.7 });
   const pants = new THREE.MeshStandardMaterial({ color:0x1c2340, roughness:.8 });
   const shoe = new THREE.MeshStandardMaterial({ color:0xffffff, roughness:.6 });
-  const add = (geo, mat, x,y,z)=>{ const m=new THREE.Mesh(geo,mat); m.position.set(x,y,z); m.castShadow=true; player.add(m); return m; };
-  add(new THREE.CapsuleGeometry(0.16,0.5,6,12), pants, -0.13, 0.55, 0);   // legs
+  const add = (geo, mat, x,y,z)=>{ const m=new THREE.Mesh(geo,mat); m.position.set(x,y,z); m.castShadow=true; playerInner.add(m); return m; };
+  add(new THREE.CapsuleGeometry(0.16,0.5,6,12), pants, -0.13, 0.55, 0);
   add(new THREE.CapsuleGeometry(0.16,0.5,6,12), pants,  0.13, 0.55, 0);
   add(new THREE.BoxGeometry(0.2,0.12,0.34), shoe, -0.13, 0.07, 0.06);
   add(new THREE.BoxGeometry(0.2,0.12,0.34), shoe,  0.13, 0.07, 0.06);
-  add(new THREE.CapsuleGeometry(0.24,0.45,6,12), shirt, 0, 1.25, 0);       // torso
-  add(new THREE.SphereGeometry(0.17,20,16), skin, 0, 1.85, 0);              // head
+  add(new THREE.CapsuleGeometry(0.24,0.45,6,12), shirt, 0, 1.25, 0);
+  add(new THREE.SphereGeometry(0.17,20,16), skin, 0, 1.85, 0);
   const armL = add(new THREE.CapsuleGeometry(0.09,0.42,6,10), shirt, -0.36, 1.3, 0.1);
   const armR = add(new THREE.CapsuleGeometry(0.09,0.42,6,10), shirt,  0.36, 1.3, 0.1);
   armL.rotation.z =  0.5; armR.rotation.z = -0.5; armL.rotation.x = armR.rotation.x = -0.7;
-  player.userData.arms = [armL, armR];
+  playerInner.userData.arms = [armL, armR];
 }
+
+function buildLowerBody(){
+  // kurta-pajama lower body to complete the scanned bust (orange kurta)
+  const kurta = new THREE.MeshStandardMaterial({ color:0xe8721c, roughness:.85 });
+  const pajama = new THREE.MeshStandardMaterial({ color:0xf2ede2, roughness:.9 });
+  const shoeM = new THREE.MeshStandardMaterial({ color:0x4a3220, roughness:.7 });
+  const add = (geo, mat, x,y,z)=>{ const m=new THREE.Mesh(geo,mat); m.position.set(x,y,z); m.castShadow=true; playerInner.add(m); return m; };
+  add(new THREE.CylinderGeometry(0.30, 0.37, 0.5, 18), kurta, 0, 0.62, 0);       // kurta skirt
+  add(new THREE.CapsuleGeometry(0.11,0.34,4,10), pajama, -0.13, 0.27, 0);        // pajama legs
+  add(new THREE.CapsuleGeometry(0.11,0.34,4,10), pajama,  0.13, 0.27, 0);
+  add(new THREE.BoxGeometry(0.16,0.1,0.3), shoeM, -0.13, 0.05, 0.05);            // shoes
+  add(new THREE.BoxGeometry(0.16,0.1,0.3), shoeM,  0.13, 0.05, 0.05);
+}
+
+buildLowerBody();
+// try local model first (permanent), then hosted copy
+const CHAR_URLS = [
+  '/models/character.glb',
+  'https://muse.ai/files/1309069215631594/1462915465938091/oprmaaxn1xwwbed5ts7jv6vz/character_small.glb'
+];
+function tryLoadChar(i){
+  if(i >= CHAR_URLS.length){ buildFallbackPlayer(); return; }
+  new GLTFLoader().load(CHAR_URLS[i],
+    (gltf)=>{
+      const model = gltf.scene;
+      // scan: y in [-1.0, 0.96] (head+torso), face toward -z. Scale so bust ~= 0.95m.
+      const s = 0.485;
+      model.scale.setScalar(s);
+      model.rotation.y = Math.PI;              // face -> +z (player forward)
+      model.position.y = 0.85 + 1.0*s;         // waist sits at hip height
+      model.traverse(o=>{ if(o.isMesh) o.castShadow = true; });
+      playerInner.add(model);
+      charLoaded = true;
+    },
+    undefined,
+    ()=>tryLoadChar(i+1)                        // next URL or fallback
+  );
+}
+tryLoadChar(0);
 const SHOOT_SPOTS = [ {x:0,z:-5.5}, {x:-2.5,z:-6.5}, {x:2.5,z:-8}, {x:0,z:-9.5} ];
 let spotIdx = 0;
 function placePlayer(){
@@ -415,7 +462,12 @@ function release(){
   shots++; shotsEl.textContent = shots;
   sndThrow();
   // player throw animation
-  player.userData.arms.forEach(a=>{ a.rotation.x = -2.2; setTimeout(()=>a.rotation.x=-0.7, 350); });
+  if(charLoaded){
+    playerInner.rotation.x = 0.28;
+    setTimeout(()=>{ playerInner.rotation.x = 0; }, 380);
+  } else {
+    (playerInner.userData.arms||[]).forEach(a=>{ a.rotation.x = -2.2; setTimeout(()=>a.rotation.x=-0.7, 350); });
+  }
 }
 addEventListener('pointerup', release);
 addEventListener('pointercancel', ()=>{ aiming=false; clearTrajectory(); powerFill.style.height='0%'; });
