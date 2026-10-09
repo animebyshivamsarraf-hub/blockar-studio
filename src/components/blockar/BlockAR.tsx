@@ -73,6 +73,7 @@ export function BlockAR() {
   const [handStatus, setHandStatus] = useState<"tracking" | "pinching" | "grabbing" | "lost" | "frozen" | "reacquiring" | "error">("lost");
   const [capability, setCapability] = useState<CapabilityReport | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
+  const [roomDepth, setRoomDepth] = useState<{ supported: boolean; nearestMeters: number; sampleCount: number }>({ supported: false, nearestMeters: 0, sampleCount: 0 });
   const lastStatusUpdate = useRef<number>(0);
   const pendingStatus = useRef<string | null>(null);
 
@@ -124,7 +125,16 @@ export function BlockAR() {
       onHandStatus: (status) => setDebouncedHandStatus(status),
     });
     engine.current = e;
-    return () => { e.dispose(); engine.current = null; };
+    const depthPoll = window.setInterval(() => {
+      const status = e.getRoomDepthStatus?.();
+      if (status) setRoomDepth(status);
+    }, 500);
+    return () => {
+      window.clearInterval(depthPoll);
+      e.dispose();
+      engine.current = null;
+      setRoomDepth({ supported: false, nearestMeters: 0, sampleCount: 0 });
+    };
   }, [stage]);
 
   useEffect(() => {
@@ -582,6 +592,21 @@ export function BlockAR() {
                 <Camera className="h-4 w-4" />
                 <span>{camOk ? "Back camera" : "Camera off"}</span>
                 <span className={cn("h-2 w-2 rounded-full", camOk ? "bg-success" : "bg-muted-foreground")} />
+              </div>
+              <div className="hud flex max-w-[190px] items-center gap-2 px-3 py-2 text-[10px]">
+                <ScanLine className={cn("h-4 w-4 shrink-0", roomDepth.supported && roomDepth.sampleCount > 0 ? "text-brand-cyan" : "text-muted-foreground")} />
+                <div className="min-w-0">
+                  <div className="font-semibold">{roomDepth.supported ? "ROOM DEPTH" : "DEPTH SENSOR CHECK"}</div>
+                  <div className="text-muted-foreground">
+                    {roomDepth.supported
+                      ? roomDepth.sampleCount > 0
+                        ? roomDepth.sampleCount + " points · center " + roomDepth.nearestMeters.toFixed(2) + " m"
+                        : "Sensor ready · scan room slowly"
+                      : engine.current?.isXR()
+                        ? "Not exposed by this device"
+                        : "Start Room AR to check"}
+                  </div>
+                </div>
               </div>
               {xrOk && !engine.current?.isXR() && (
                 <button onClick={enterXR} className="pointer-events-auto rounded-xl bg-success px-3 py-2 text-xs font-semibold text-background">Start WebXR AR</button>
