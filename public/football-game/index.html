@@ -24,6 +24,8 @@
   #resetBtn:active { transform:scale(.92); }
   #power { position:fixed; right:18px; top:50%; transform:translateY(-50%); width:10px; height:180px; border-radius:6px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.15); z-index:10; overflow:hidden; pointer-events:none; }
   #powerFill { position:absolute; bottom:0; left:0; right:0; height:0%; background:linear-gradient(to top,#37e08b,#ffd54a 60%,#ff5a5a); border-radius:6px; transition:height .05s; }
+  #wind { position:fixed; top:76px; left:0; right:0; text-align:center; z-index:10; pointer-events:none; font-size:15px; font-weight:700; color:#9fd8ff; text-shadow:0 2px 8px rgba(0,0,0,.6); }
+  #target { position:fixed; top:102px; left:0; right:0; text-align:center; z-index:10; pointer-events:none; font-size:12px; font-weight:600; color:#ffd54a; text-shadow:0 2px 8px rgba(0,0,0,.6); letter-spacing:.5px; }
 </style>
 <script type="importmap">
 { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
@@ -32,12 +34,15 @@
 <body>
 <div id="game"></div>
 <div id="hud">
+  <div class="pill"><small>Level</small><span id="level">1</span></div>
   <div class="pill"><small>Score</small><span id="score">0</span></div>
   <div class="pill"><small>Streak</small><span id="streak">🔥 0</span></div>
   <div class="pill"><small>Shots</small><span id="shots">0</span></div>
 </div>
+<div id="wind"></div>
+<div id="target"></div>
 <div id="msg"><div class="big"></div><div class="sub"></div></div>
-<div id="hint"><span>👆 Drag back &amp; aim — release to shoot!</span></div>
+<div id="hint"><span>👆 Drag down for power, left/right to aim — release to shoot!</span></div>
 <div id="power"><div id="powerFill"></div></div>
 <button id="resetBtn" title="Reset ball">↺</button>
 
@@ -255,6 +260,7 @@ scene.add(player);
 /* ============ GAME STATE ============ */
 const G = 12.5;
 let score=0, shots=0, streak=0, best=0;
+let level=1, basketsThisLevel=0, wind=0;
 let ballState = 'held';           // held | flying | scored | dead
 let vel = new THREE.Vector3();
 let spin = new THREE.Vector3();
@@ -264,7 +270,29 @@ let prevY = 0;
 
 const scoreEl = document.getElementById('score'), streakEl = document.getElementById('streak'),
       shotsEl = document.getElementById('shots'), msgEl = document.getElementById('msg'),
-      hintEl = document.getElementById('hint'), powerFill = document.getElementById('powerFill');
+      hintEl = document.getElementById('hint'), powerFill = document.getElementById('powerFill'),
+      levelEl = document.getElementById('level'), windEl = document.getElementById('wind'),
+      targetEl = document.getElementById('target');
+
+function basketsNeeded(){ return 2 + Math.floor((level-1)/2); }
+function setWind(harder=false){
+  if(level < 3 && !harder){ wind = 0; }
+  else { wind = (Math.random()*2-1) * (1 + (level-3)*0.5 + (harder?0.5:0)); wind = Math.round(wind*10)/10; }
+  updateWindUI();
+}
+function updateWindUI(){
+  if(wind === 0){ windEl.textContent = ''; }
+  else {
+    const arrow = wind > 0 ? '→' : '←';
+    windEl.textContent = `💨 Wind ${arrow} ${Math.abs(wind).toFixed(1)}`;
+  }
+  targetEl.textContent = `🎯 ${basketsThisLevel}/${basketsNeeded()} baskets to Level ${level+1}`;
+}
+function updateHUD(){
+  levelEl.textContent = level;
+  scoreEl.textContent = score;
+  updateWindUI();
+}
 
 function showMsg(big, sub, ms=1400){
   msgEl.querySelector('.big').textContent = big;
@@ -313,7 +341,8 @@ function showTrajectory(v0){
   const p = ball.position.clone(), v = v0.clone();
   const dt = 1/30;
   for(let i=0;i<45;i++){
-    v.y -= G*dt; p.addScaledVector(v, dt);
+    v.y -= G*dt; v.x += wind*dt;
+    p.addScaledVector(v, dt);
     if(p.y < BALL_R) break;
     pts.push(p.clone());
   }
@@ -335,15 +364,20 @@ addEventListener('pointerdown', e=>{
 });
 addEventListener('pointermove', e=>{
   if(!aiming || ballState !== 'held') return;
-  const dx = (e.clientX - aimStart.x) / innerWidth;   // left/right aim
-  const dy = (aimStart.y - e.clientY) / innerHeight;  // drag down = more power... actually drag up-back
-  // aim: drag DOWN increases power, drag LEFT/RIGHT steers
-  const power = THREE.MathUtils.clamp(dy * 2.2, 0, 1);
+  const dxPx = e.clientX - aimStart.x;
+  const dyPx = e.clientY - aimStart.y;
+  // SLINGSHOT: pull DOWN (or push UP) to charge power — both directions work,
+  // so the ball never gets stuck on a weak fixed shot.
+  const pull = Math.abs(dyPx);
+  const power = THREE.MathUtils.clamp(pull / (innerHeight*0.38), 0, 1);
+  // STEER: drag LEFT / RIGHT to aim sideways
+  const steer = THREE.MathUtils.clamp(dxPx / (innerWidth*0.25), -1, 1);
+
   const dir = new THREE.Vector3(HOOP.x - ball.position.x, 0, HOOP.z - ball.position.z).normalize();
   const side = new THREE.Vector3(-dir.z, 0, dir.x);
-  const v0 = dir.clone().multiplyScalar(4 + power*9);
-  v0.y = 3.5 + power*7;
-  v0.addScaledVector(side, -dx * 6 * (0.4 + power));
+  const v0 = dir.clone().multiplyScalar(4.5 + power*10.5);
+  v0.y = 4 + power*8.5;
+  v0.addScaledVector(side, steer * (2.5 + power*6));
   aimVec.copy(v0);
   powerFill.style.height = (power*100)+'%';
   showTrajectory(v0);
@@ -354,7 +388,7 @@ function release(){
   powerFill.style.height = '0%';
   clearTrajectory();
   if(ballState !== 'held') return;
-  if(aimVec.lengthSq() < 4){ aimVec.set(0,0,0); return; } // too weak — cancel
+  if(aimVec.lengthSq() < 9){ aimVec.set(0,0,0); return; } // just a tap — cancel
   vel.copy(aimVec);
   spin.set(Math.random()*8-4, Math.random()*6-3, Math.random()*8-4);
   ballState = 'flying';
@@ -374,6 +408,7 @@ function stepPhysics(dt){
   if(ballState !== 'flying') return;
   prevY = ball.position.y;
   vel.y -= G*dt;
+  vel.x += wind*dt;   // wind pushes the ball sideways
   ball.position.addScaledVector(vel, dt);
   ball.rotation.x += spin.x*dt; ball.rotation.y += spin.y*dt; ball.rotation.z += spin.z*dt;
 
@@ -432,7 +467,7 @@ function stepPhysics(dt){
 }
 
 function onScore(){
-  score += 2 + Math.min(streak, 5);
+  score += 2 + Math.min(streak, 5) + (level-1);
   streak++;
   scoreEl.textContent = score;
   streakEl.textContent = '🔥 ' + streak;
@@ -450,13 +485,30 @@ function onScore(){
 
 function nextShot(){
   if(ballState==='flying') return;
-  if(scoredThisFlight){ /* keep streak */ }
-  else { if(streak>0) showMsg('MISS', 'Streak reset — next one!', 900); streak = 0; streakEl.textContent='🔥 0'; }
-  // every 3 baskets, move to a new spot
-  if(scoredThisFlight && score>0 && (spotIdx < SHOOT_SPOTS.length-1) && Math.random()<0.6){
-    spotIdx++;
-    placePlayer();
-    showMsg('NEW SPOT 📍', 'Further out — good luck!', 1100);
+  if(scoredThisFlight){
+    basketsThisLevel++;
+    if(basketsThisLevel >= basketsNeeded()){
+      basketsThisLevel = 0;
+      if(spotIdx < SHOOT_SPOTS.length-1){
+        spotIdx++;
+        level = spotIdx+1;
+        placePlayer();
+        setWind();
+        updateHUD();
+        showMsg('LEVEL '+level+' 📍', 'Further out'+(wind!==0 ? ' + wind! 💨' : ' — good luck!'), 1500);
+      } else {
+        level++;
+        setWind(true);
+        updateHUD();
+        showMsg('LEVEL '+level+' 📍', 'Wind picking up! 💨', 1500);
+      }
+    } else {
+      updateHUD();
+    }
+  }
+  else {
+    if(streak>0) showMsg('MISS', 'Streak reset — next one!', 900);
+    streak = 0; streakEl.textContent='🔥 0';
   }
   resetBall();
 }
@@ -517,6 +569,8 @@ addEventListener('resize', ()=>{
 });
 
 resetBall();
+setWind();
+updateHUD();
 animate();
 showMsg('🏀 FOOTBALL BASKET 🏀', 'Drag & release to shoot!', 2200);
 </script>
