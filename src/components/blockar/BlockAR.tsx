@@ -356,7 +356,12 @@ export function BlockAR() {
       };
       handRuntime.current = rt;
       stopHands.current = () => { rt.dispose(); handRuntime.current = null; setHandLabels([]); engine.current?.handLost(); };
-      await rt.start("mediapipe", { stream: activeStream });
+      // Timeout guard: if MediaPipe hangs (worker/WASM issue), don't stay stuck on "Please wait..." forever.
+      // 90s covers the 80s worker timeout + margin.
+      await Promise.race([
+        rt.start("mediapipe", { stream: activeStream }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Hand tracking startup timed out (90s) — try again")), 90000)),
+      ]);
       if (rt.getSystem() !== "TRACKING") throw new Error(rt.getError() || "Hand tracking failed to start");
       setHand("on");
       setGuide(false);
