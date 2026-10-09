@@ -287,7 +287,47 @@ export class HandSystemRuntime {
     // main thread, which is the important difference from detectAsync alone.
     if (isPhone) {
       this.mpIntervalMs = MP_INTERVAL_CPU_MS;
-      await this.startMediaPipeWorker(generation);
+      try {
+        // Prefer worker inference, but do not leave mobile users stuck forever
+        // if a browser blocks the worker/WASM startup. Fall back to CPU on the
+        // main thread at a deliberately low frame rate.
+        await Promise.race([
+          this.startMediaPipeWorker(generation),
+          new Promise<never>((_, reject) => window.setTimeout(
+            () => reject(new Error("Hand worker startup timed out; switching to CPU fallback")),
+            25000,
+          )),
+        ]);
+      } catch (workerError) {
+        if (generation !== this.mpGeneration) throw workerError;
+        try { this.handWorker?.terminate(); } catch {}
+        this.handWorker = null;
+        this.workerReady = false;
+        this.workerBusy = false;
+        this.workerRestarting = false;
+        this.session = "camera live · main-thread CPU fallback";
+        const { FilesetResolver, HandLandmarker } = await import("@mediapipe/tasks-vision");
+        const fileset = await FilesetResolver.forVisionTasks(getWasmUrl());
+        this.landmarker = await Promise.race([
+          HandLandmarker.createFromOptions(fileset, {
+            baseOptions: { modelAssetPath: getModelUrl(), delegate: "CPU" },
+            runningMode: "LIVE_STREAM",
+            numHands: 2,
+            minHandDetectionConfidence: 0.5,
+            minHandPresenceConfidence: 0.5,
+            minTrackingConfidence: 0.5,
+            resultCallback: (res: any) => {
+              if (generation !== this.mpGeneration || !this.stream) return;
+              this.consumeMediaPipeResult(res, this.video);
+            },
+          }),
+          new Promise<never>((_, reject) => window.setTimeout(
+            () => reject(new Error("MediaPipe CPU fallback timed out. Use touch controls or retry.")),
+            30000,
+          )),
+        ]);
+        this.error = null;
+      }
       this.resetCube();
       return;
     }
