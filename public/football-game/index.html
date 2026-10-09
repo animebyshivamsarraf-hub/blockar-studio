@@ -93,9 +93,32 @@
 </style>
 <script type="importmap">
 { "imports": {
-  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
 } }
+</script>
+<script>
+/* instant loading animation — runs before Three.js downloads */
+(function(){
+  var p=0, fill=document.getElementById('loadfill');
+  var tips=['Tip: Power ke saath direction bhi control karo!','Tip: Dotted line tumhara rasta hai!','Tip: Streak par bonus points milte hain!','Tip: Wind wale level me aim adjust karo!'];
+  var ti=document.getElementById('loadtip'), ti2=0;
+  window.__loadInt=setInterval(function(){
+    p=Math.min(p+8,90); if(fill) fill.style.width=p+'%';
+    if(++ti2%4===0&&ti) ti.textContent=tips[Math.floor(Math.random()*tips.length)];
+  },300);
+  window.__loadDone=function(){
+    clearInterval(window.__loadInt); clearTimeout(window.__loadTimeout);
+    if(fill) fill.style.width='100%';
+  };
+  /* if Three.js hasn't loaded in 25s, show retry */
+  window.__loadTimeout=setTimeout(function(){
+    var tip=document.getElementById('loadtip');
+    if(tip && !window.__gameReady){
+      tip.innerHTML='Slow network? <a href="" style="color:#ffd54a;font-weight:800;">Tap to retry ↺</a>';
+    }
+  },25000);
+})();
 </script>
 </head>
 <body>
@@ -708,13 +731,10 @@ function animate(){
   renderer.render(scene,camera);
 }
 addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
-/* loading */
-let lp=0; const ltips=['Tip: Power ke saath direction bhi control karo!','Tip: Dotted line tumhara rasta hai!','Tip: Streak par bonus points milte hain!','Tip: Wind wale level me aim adjust karo!'];
-const liv=setInterval(()=>{
-  lp+=25; $('loadfill').style.width=Math.min(lp,100)+'%';
-  $('loadtip').textContent=ltips[Math.floor(Math.random()*ltips.length)];
-  if(lp>=100){clearInterval(liv);setTimeout(()=>{buildLevels();show('menu');},400);}
-},350);
+/* loading -> menu (instant loader already ran; just finish it) */
+window.__loadDone && window.__loadDone();
+window.__gameReady=true;
+setTimeout(()=>{ buildLevels(); show('menu'); }, 500);
 animate();
 </script>
 </body>
