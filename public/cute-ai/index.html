@@ -167,7 +167,7 @@ const stage=document.getElementById('stage');
 const scene=new THREE.Scene();
 scene.fog=new THREE.Fog(0x070a18,14,30);
 const camera=new THREE.PerspectiveCamera(38,1,.1,100);
-camera.position.set(0,1.55,7.4); camera.lookAt(0,1.35,0);
+camera.position.set(0,.15,5.6); camera.lookAt(0,0,0);
 let renderer;
 try{
   renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
@@ -201,15 +201,12 @@ composer.addPass(new OutputPass());
   for(let i=0;i<160;i++)p.push((Math.random()-.5)*24,Math.random()*11-1,(Math.random()-.5)*18-4);
   g.setAttribute('position',new THREE.Float32BufferAttribute(p,3));
   scene.add(new THREE.Points(g,new THREE.PointsMaterial({color:0x9db8ff,size:.09,transparent:true,opacity:.65}))); }
-/* platform */
-{ const disc=new THREE.Mesh(new THREE.CylinderGeometry(1.5,1.65,.12,40),
-    new THREE.MeshStandardMaterial({color:0x111a35,roughness:.5,metalness:.4}));
-  disc.position.y=-.06; disc.receiveShadow=true; scene.add(disc);
-  const ring=new THREE.Mesh(new THREE.TorusGeometry(1.5,.035,10,60),
-    new THREE.MeshBasicMaterial({color:0x38bdf8,transparent:true,opacity:.8}));
-  ring.rotation.x=Math.PI/2; ring.position.y=.02; scene.add(ring);
-  const ring2=ring.clone(); ring2.scale.setScalar(.78); ring2.material=ring.material.clone();
-  ring2.material.opacity=.35; scene.add(ring2); }
+/* hover halo (floating head glow) */
+{ const halo=new THREE.Mesh(new THREE.TorusGeometry(1.0,.04,12,48),
+    new THREE.MeshBasicMaterial({color:0x38bdf8,transparent:true,opacity:.55}));
+  halo.rotation.x=Math.PI/2; halo.position.y=-1.15; scene.add(halo);
+  const halo2=halo.clone(); halo2.scale.setScalar(1.35); halo2.material=halo.material.clone();
+  halo2.material.opacity=.2; scene.add(halo2); }
 
 /* ================= LED FACE ================= */
 const FC=168;
@@ -367,8 +364,8 @@ const M={
   glowB:new THREE.MeshBasicMaterial({color:0x38bdf8}),
   glowC:new THREE.MeshBasicMaterial({color:0x6ee7ff}),
 };
-/* ---- head ---- */
-const headG=new THREE.Group(); headG.position.y=2.18; robot.add(headG);
+/* ---- head (head-only, no body) ---- */
+const headG=new THREE.Group(); headG.position.y=0; robot.add(headG);
 headG.add(new THREE.Mesh(new RoundedBoxGeometry(1.5,1.28,1.28,4,.34),M.white));
 const scr=new THREE.Mesh(new RoundedBoxGeometry(1.28,1.06,.34,4,.2),M.screen);
 scr.position.z=.52; headG.add(scr);
@@ -387,58 +384,6 @@ for(const s of [-1,1]){
 /* antenna nub */
 { const n=new THREE.Mesh(new THREE.CylinderGeometry(.05,.07,.12,12),M.white);
   n.position.y=.68; headG.add(n); }
-/* ---- neck + torso ---- */
-{ const nk=new THREE.Mesh(new THREE.CylinderGeometry(.16,.18,.22,16),M.dark);
-  nk.position.y=1.42; robot.add(nk); }
-const torsoG=new THREE.Group(); torsoG.position.y=1.02; robot.add(torsoG);
-{ const t=new THREE.Mesh(new THREE.CapsuleGeometry(.4,.34,8,20),M.white);
-  t.castShadow=true; torsoG.add(t);
-  const belt=new THREE.Mesh(new THREE.TorusGeometry(.4,.05,10,28),M.blue);
-  belt.rotation.x=Math.PI/2; belt.position.y=-.18; torsoG.add(belt); }
-/* chest star */
-function starMesh(r,depth,mat){
-  const sh=new THREE.Shape();
-  for(let i=0;i<10;i++){ const a=-Math.PI/2+i*Math.PI/5,rr=i%2?r*.45:r;
-    const x=Math.cos(a)*rr,y=Math.sin(a)*rr; i?sh.lineTo(x,y):sh.moveTo(x,y); }
-  sh.closePath();
-  return new THREE.Mesh(new THREE.ExtrudeGeometry(sh,{depth:depth,bevelEnabled:true,bevelSize:.02,bevelThickness:.02,bevelSegments:2}),mat);
-}
-{ const st=starMesh(.17,.05,new THREE.MeshBasicMaterial({color:0x7dd3fc}));
-  st.position.set(0,.12,.36); torsoG.add(st);
-  const halo=new THREE.Mesh(new THREE.CircleGeometry(.24,24),
-    new THREE.MeshBasicMaterial({color:0x38bdf8,transparent:true,opacity:.28}));
-  halo.position.set(0,.12,.35); torsoG.add(halo); }
-/* ---- arms ---- */
-function makeArm(s){
-  const sh=new THREE.Group(); sh.position.set(s*.48,.22,0); torsoG.add(sh);
-  const up=new THREE.Mesh(new THREE.CapsuleGeometry(.11,.3,6,14),M.white);
-  up.position.y=-.2; up.castShadow=true; sh.add(up);
-  const el=new THREE.Group(); el.position.y=-.4; sh.add(el);
-  const ring=new THREE.Mesh(new THREE.TorusGeometry(.11,.03,8,18),M.blue);
-  ring.rotation.x=Math.PI/2; el.add(ring);
-  const fo=new THREE.Mesh(new THREE.CapsuleGeometry(.095,.26,6,14),M.white);
-  fo.position.y=-.2; el.add(fo);
-  const hand=new THREE.Mesh(new THREE.SphereGeometry(.13,18,14),M.white);
-  hand.position.y=-.4; hand.scale.set(1,1.15,.9); el.add(hand);
-  sh.rotation.z=s*.18;
-  return {sh,el};
-}
-const armL=makeArm(-1),armR=makeArm(1);
-/* ---- legs ---- */
-function makeLeg(s){
-  const hp=new THREE.Group(); hp.position.set(s*.2,-.42,0); torsoG.add(hp);
-  const th=new THREE.Mesh(new THREE.CapsuleGeometry(.13,.26,6,14),M.white);
-  th.position.y=-.18; th.castShadow=true; hp.add(th);
-  const kn=new THREE.Group(); kn.position.y=-.38; hp.add(kn);
-  const ring=new THREE.Mesh(new THREE.TorusGeometry(.12,.03,8,18),M.blue);
-  ring.rotation.x=Math.PI/2; kn.add(ring);
-  const sn=new THREE.Mesh(new THREE.CapsuleGeometry(.11,.22,6,14),M.white);
-  sn.position.y=-.18; kn.add(sn);
-  const ft=new THREE.Mesh(new RoundedBoxGeometry(.24,.16,.34,3,.06),M.white);
-  ft.position.set(0,-.36,.05); kn.add(ft);
-  return {hp,kn};
-}
-const legL=makeLeg(-1),legR=makeLeg(1);
 robot.traverse(o=>{ if(o.isMesh){ o.castShadow=true; } });
 
 /* floating symbols */
@@ -451,9 +396,9 @@ const symMats={ '?':new THREE.SpriteMaterial({map:symTex('?','#6ee7ff'),transpar
   '!':new THREE.SpriteMaterial({map:symTex('!','#6ee7ff'),transparent:true,depthWrite:false}),
   '♪':new THREE.SpriteMaterial({map:symTex('♪','#6ee7ff'),transparent:true,depthWrite:false}) };
 const sym=new THREE.Sprite(symMats['?']); sym.scale.setScalar(.55);
-sym.position.set(1.05,3.35,0); sym.visible=false; scene.add(sym);
+sym.position.set(1.05,1.35,0); sym.visible=false; scene.add(sym);
 const sym2=new THREE.Sprite(symMats['z']); sym2.scale.setScalar(.4);
-sym2.position.set(-.95,3.4,0); sym2.visible=false; scene.add(sym2);
+sym2.position.set(-.95,1.4,0); sym2.visible=false; scene.add(sym2);
 function showSym(s){ sym.visible=!!s; sym2.visible=(s==='z');
   if(s&&symMats[s]) sym.material=symMats[s]; }
 
@@ -491,32 +436,14 @@ const Anim={
     /* head */
     this.tilt+=(this.tiltT-this.tilt)*Math.min(1,dt*5);
     this.lean+=(this.leanT-this.lean)*Math.min(1,dt*5);
-    headG.rotation.z=this.tilt+Math.sin(time*1.1)*.025+(st==='sleepy'?Math.sin(time*.9)*.1:0);
-    headG.rotation.x=this.lean+(st==='speaking'?Math.sin(time*3.2)*.02:0);
-    headG.rotation.y=Math.sin(time*.7)*.08;
-    /* torso sway */
-    torsoG.rotation.z=Math.sin(time*1.7+1)*.02;
-    torsoG.rotation.x=this.lean*.5;
-    /* arms */
+    const wiggle=(st==='waving'||st==='greeting')?Math.sin(this.waveT*9)*.18:0;
     if(st==='waving'||st==='greeting'){
       this.waveT+=dt;
-      armR.sh.rotation.z=-2.5+Math.sin(this.waveT*9)*.45;
-      armR.el.rotation.z=Math.sin(this.waveT*9)*.3;
       if(this.waveT>2.4&&st==='waving'){ this.set('idle'); }
-    } else {
-      armL.sh.rotation.z=-.18+Math.sin(time*1.7)*.05;
-      armR.sh.rotation.z=.18-Math.sin(time*1.7)*.05;
-      armL.sh.rotation.x=Math.sin(time*1.3)*.05;
-      armR.sh.rotation.x=-Math.sin(time*1.3)*.05;
-      armR.el.rotation.z=0;
     }
-    if(st==='happy'||st==='excited'){ // cheer: both arms up a bit
-      armL.sh.rotation.z=-.7; armR.sh.rotation.z=.7;
-    }
-    if(st==='sad'){ armL.sh.rotation.z=-.08; armR.sh.rotation.z=.08; }
-    /* legs subtle */
-    legL.hp.rotation.x=Math.sin(time*1.7)*.03;
-    legR.hp.rotation.x=-Math.sin(time*1.7)*.03;
+    headG.rotation.z=this.tilt+Math.sin(time*1.1)*.025+(st==='sleepy'?Math.sin(time*.9)*.1:0)+wiggle;
+    headG.rotation.x=this.lean+(st==='speaking'?Math.sin(time*3.2)*.02:0);
+    headG.rotation.y=Math.sin(time*.7)*.08;
     /* blink + double blink */
     Face.blinkT-=dt;
     if(Face.blinkT<=0&&Face.emotion==='normal'){
@@ -528,8 +455,8 @@ const Anim={
     if(st==='idle'&&Math.random()<dt*.3){
       Face.lookX=(Math.random()-.5)*1.1; Face.lookY=(Math.random()-.5)*.5; Face.draw(); }
     if(Face.emotion==='sad'){ Face.tearT+=dt; Face.draw(); }
-    if(sym.visible) sym.position.y=3.35+Math.sin(time*3)*.1;
-    if(sym2.visible) sym2.position.y=3.4+Math.sin(time*2.2)*.09;
+    if(sym.visible) sym.position.y=1.35+Math.sin(time*3)*.1;
+    if(sym2.visible) sym2.position.y=1.4+Math.sin(time*2.2)*.09;
   }
 };
 
