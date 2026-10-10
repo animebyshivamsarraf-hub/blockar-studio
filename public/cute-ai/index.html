@@ -190,10 +190,12 @@ scene.add(new THREE.AmbientLight(0x8fa3ff,.65));
 const key=new THREE.DirectionalLight(0xffffff,1.0); key.position.set(4,7,6); scene.add(key);
 const rimB=new THREE.DirectionalLight(0x38bdf8,.55); rimB.position.set(-6,3,-2); scene.add(rimB);
 const rimP=new THREE.DirectionalLight(0xc084fc,.4); rimP.position.set(6,2,-3); scene.add(rimP);
+/* front fill so the white glossy frame reads bright white like the reference */
+const fill=new THREE.DirectionalLight(0xffffff,.55); fill.position.set(-1,2,8); scene.add(fill);
 /* subtle bloom — never washes out the face */
 const composer=new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene,camera));
-const bloom=new UnrealBloomPass(new THREE.Vector2(256,256),.32,.55,.82);
+const bloom=new UnrealBloomPass(new THREE.Vector2(256,256),.25,.55,.85);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 /* stars */
@@ -201,12 +203,7 @@ composer.addPass(new OutputPass());
   for(let i=0;i<160;i++)p.push((Math.random()-.5)*24,Math.random()*11-1,(Math.random()-.5)*18-4);
   g.setAttribute('position',new THREE.Float32BufferAttribute(p,3));
   scene.add(new THREE.Points(g,new THREE.PointsMaterial({color:0x9db8ff,size:.09,transparent:true,opacity:.65}))); }
-/* hover halo (floating head glow) */
-{ const halo=new THREE.Mesh(new THREE.TorusGeometry(1.0,.04,12,48),
-    new THREE.MeshBasicMaterial({color:0x38bdf8,transparent:true,opacity:.55}));
-  halo.rotation.x=Math.PI/2; halo.position.y=-1.15; scene.add(halo);
-  const halo2=halo.clone(); halo2.scale.setScalar(1.35); halo2.material=halo.material.clone();
-  halo2.material.opacity=.2; scene.add(halo2); }
+/* no halo — the reference board has a clean floating head with no rings */
 
 /* ================= LED FACE ================= */
 const FC=168;
@@ -399,29 +396,29 @@ const M={
 };
 /* ---- head (head-only, no body) ---- */
 const headG=new THREE.Group(); headG.position.y=0; robot.add(headG);
-/* generously rounded casing — large corner radius per reference */
-headG.add(new THREE.Mesh(new RoundedBoxGeometry(1.5,1.28,1.28,5,.45),M.white));
-/* black display follows outer curvature — large corner radius */
-const scr=new THREE.Mesh(new RoundedBoxGeometry(1.26,1.04,.34,5,.3),M.screen);
+/* white glossy frame — thick bezel like the reference board */
+headG.add(new THREE.Mesh(new RoundedBoxGeometry(1.66,1.3,1.3,5,.5),M.white));
+/* black LED display — clean rounded rectangle inset in the white frame */
+const scr=new THREE.Mesh(new RoundedBoxGeometry(1.3,1.02,.34,5,.3),M.screen);
 scr.position.z=.52; headG.add(scr);
 const faceMesh=new THREE.Mesh(new THREE.PlaneGeometry(1.18,1.0),
   new THREE.MeshBasicMaterial({map:faceTex,transparent:true}));
 faceMesh.position.z=.71; headG.add(faceMesh);
-/* ears */
+/* ears — prominent glowing blue rings like the reference */
 const earRings=[];
 for(const s of [-1,1]){
-  const ear=new THREE.Mesh(new THREE.CylinderGeometry(.2,.2,.2,24),M.blue);
-  ear.rotation.z=Math.PI/2; ear.position.set(s*.78,0,0); headG.add(ear);
+  const ear=new THREE.Mesh(new THREE.CylinderGeometry(.24,.24,.22,24),M.blue);
+  ear.rotation.z=Math.PI/2; ear.position.set(s*.83,0,0); headG.add(ear);
   const ringMat=new THREE.MeshBasicMaterial({color:0x38bdf8,transparent:true,opacity:.95});
-  const ring=new THREE.Mesh(new THREE.TorusGeometry(.12,.032,10,28),ringMat);
-  ring.rotation.y=Math.PI/2; ring.position.set(s*.9,0,0); headG.add(ring);
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(.15,.04,10,28),ringMat);
+  ring.rotation.y=Math.PI/2; ring.position.set(s*.96,0,0); headG.add(ring);
   earRings.push(ring);
-  const cap=new THREE.Mesh(new THREE.CircleGeometry(.085,20),M.dark);
-  cap.rotation.y=s*Math.PI/2; cap.position.set(s*.9,0,.001); headG.add(cap);
+  const cap=new THREE.Mesh(new THREE.CircleGeometry(.1,20),M.dark);
+  cap.rotation.y=s*Math.PI/2; cap.position.set(s*.96,0,.001); headG.add(cap);
 }
 /* top detail: small smooth rounded bump, attached to casing */
 { const n=new THREE.Mesh(new THREE.SphereGeometry(.1,18,14),M.white);
-  n.scale.set(1,.72,1); n.position.y=.65; headG.add(n); }
+  n.scale.set(1,.72,1); n.position.y=.67; headG.add(n); }
 robot.traverse(o=>{ if(o.isMesh){ o.castShadow=true; } });
 
 /* floating symbols */
