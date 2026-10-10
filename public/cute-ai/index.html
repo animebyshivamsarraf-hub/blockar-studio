@@ -230,14 +230,16 @@ const Face={
     c.lineCap='round';
     const GE=(fn)=>{ c.save(); c.shadowColor=blue; c.shadowBlur=13; c.fillStyle=blue; c.strokeStyle=blue; fn(); c.restore(); };
     /* brows */
-    const brow=(x,lift,angry,sad)=>{ c.save(); c.shadowColor=blue; c.shadowBlur=7; c.strokeStyle=blue; c.lineWidth=6;
+    const brow=(x,lift,angry,sad,conf,side)=>{ c.save(); c.shadowColor=blue; c.shadowBlur=7; c.strokeStyle=blue; c.lineWidth=6;
       c.beginPath();
       if(angry){ c.moveTo(x-19,ey-42+lift); c.lineTo(x+19,ey-27+lift); }
       else if(sad){ c.moveTo(x-18,ey-28+lift); c.quadraticCurveTo(x,ey-42+lift,x+18,ey-32+lift); }
+      else if(conf){ if(side<0) c.arc(x,ey-46+lift,20,Math.PI*1.18,Math.PI*1.82);
+        else c.arc(x,ey-22+lift,20,Math.PI*1.18,Math.PI*1.82); }
       else c.arc(x,ey-34+lift,20,Math.PI*1.18,Math.PI*1.82);
       c.stroke(); c.restore(); };
     const bl=E==='surprised'?-10:E==='sad'?8:0;
-    if(E!=='sleepy'&&E!=='blink'){ brow(ex1,bl,E==='angry',E==='sad'); brow(ex2,bl,E==='angry',E==='sad'); }
+    if(E!=='sleepy'&&E!=='blink'){ brow(ex1,bl,E==='angry',E==='sad',E==='confused',-1); brow(ex2,bl,E==='angry',E==='sad',E==='confused',1); }
     /* big prominent eyes like the reference renders */
     const ew=37,eh=45;
     const openEye=(x,pux,puy,ps)=>{ // glowing eye + white highlight pupil
@@ -300,12 +302,18 @@ const Face={
         c.beginPath(); c.arc(ex2,ey,25,0,Math.PI*2); c.stroke();
         c.beginPath(); c.arc(ex1,ey-3,8,0,Math.PI*2); c.fill();
         c.beginPath(); c.arc(ex2,ey-3,8,0,Math.PI*2); c.fill(); });
-    } else if(E==='thinking'){ // pupils looking sideways
+    } else if(E==='thinking'){ // looking up (board spec)
       GE(()=>{ c.beginPath(); c.ellipse(ex1,ey,ew/2,eh/2,0,0,Math.PI*2); c.fill();
         c.beginPath(); c.ellipse(ex2,ey,ew/2,eh/2,0,0,Math.PI*2); c.fill();
         c.shadowBlur=0; c.fillStyle='#04040c';
-        c.beginPath(); c.arc(ex1+10,ey-3,9,0,Math.PI*2); c.fill();
-        c.beginPath(); c.arc(ex2+10,ey-3,9,0,Math.PI*2); c.fill(); });
+        c.beginPath(); c.arc(ex1,ey-13,9,0,Math.PI*2); c.fill();
+        c.beginPath(); c.arc(ex2,ey-13,9,0,Math.PI*2); c.fill(); });
+    } else if(E==='confused'){ // tilted asymmetric eyes
+      GE(()=>{ c.beginPath(); c.ellipse(ex1-5,ey-7,ew/2,eh/2,0,0,Math.PI*2); c.fill();
+        c.beginPath(); c.ellipse(ex2+5,ey+7,ew/2-4,eh/2-5,0,0,Math.PI*2); c.fill();
+        c.shadowBlur=0; c.fillStyle='#eafcff';
+        c.beginPath(); c.arc(ex1+1,ey-15,7,0,Math.PI*2); c.fill();
+        c.beginPath(); c.arc(ex2+11,ey-1,6,0,Math.PI*2); c.fill(); });
     } else if(E==='wink'){
       openEye(ex1,5,-8,7);
       GE(()=>{ c.lineWidth=9;
@@ -343,6 +351,10 @@ const Face={
       c.beginPath(); c.ellipse(mx,my,10,13,0,0,Math.PI*2); c.stroke();
     } else if(E==='thinking'){
       c.font='bold 24px monospace'; c.textAlign='center'; c.fillText('3',mx,my+8);
+    } else if(E==='confused'){ // wavy uncertain mouth
+      c.beginPath(); c.moveTo(mx-15,my);
+      c.quadraticCurveTo(mx-7,my-7,mx,my);
+      c.quadraticCurveTo(mx+7,my+7,mx+15,my); c.stroke();
     } else if(E==='sleepy'){
       c.beginPath(); c.moveTo(mx-11,my); c.lineTo(mx+11,my); c.stroke();
     } else if(E==='love'||E==='wink'){
@@ -410,6 +422,7 @@ const Anim={
     if(s==='greeting'||s==='waving'){ Face.emotion='happy'; }
     else if(s==='listening'){ Face.emotion='surprised'; this.leanT=.06; }
     else if(s==='thinking'){ Face.emotion='thinking'; this.tiltT=.2; Face.lookY=-.6; showSym('?'); }
+    else if(s==='confused'){ Face.emotion='confused'; this.tiltT=.14; }
     else if(s==='speaking'){ Face.emotion='normal'; this.leanT=.04; }
     else if(s==='happy'){ Face.emotion='happy'; }
     else if(s==='laugh'){ Face.emotion='laugh'; }
@@ -503,6 +516,7 @@ const BRAIN=[
   {k:['neend','sleepy','so ja'],r:["Uff... mujhe neend aa rahi hai... zzz 😴"],e:'sleepy'},
   {k:['wow','surprise'],r:["Sach me?! 😲"],e:'surprised'},
   {k:['soch','thinking'],r:["Hmm... soch rahi hun... 🤔"],e:'thinking'},
+  {k:['confuse','confusion','samajh nahi aa raha','samajh nahi aaya'],r:["Hmm? 🤨 Thoda confuse ho gayi! Phir se samjhao na!"],e:'confused'},
   {k:['cute','pyari','pyara','sundar'],r:["Sach me?! 🥰 Tum bhi bahut cute ho!"],e:'love'},
   {k:['bye','alvida','good night','shubh ratri'],r:["Bye bye! 🥺 Phir milenge!"],e:'waving'},
   {k:['good morning','suprabhat'],r:["Good morning! ☀️"],e:'happy',act:'waving'},
@@ -548,10 +562,10 @@ const chatHistory=[];
 function pushHistory(q,a){ chatHistory.push({role:'user',content:q},{role:'assistant',content:a});
   while(chatHistory.length>8)chatHistory.splice(0,2); }
 function getGeminiKey(){ return (localStorage.getItem('mimi_gemini_key')||'').trim(); }
-const LLM_SYSTEM='You are Mimi, a cute 3D robot AI friend. Reply in the SAME language as the user (Roman Hindi/Hinglish or English). Be sweet, playful and warm like a close friend. Keep it SHORT - 1 to 2 sentences only, under 40 words. End your reply with exactly one emotion tag: [happy] [sad] [excited] [love] [surprised] [angry] [sleepy] [thinking]';
+const LLM_SYSTEM='You are Mimi, a cute 3D robot AI friend. Reply in the SAME language as the user (Roman Hindi/Hinglish or English). Be sweet, playful and warm like a close friend. Keep it SHORT - 1 to 2 sentences only, under 40 words. End your reply with exactly one emotion tag: [happy] [sad] [excited] [love] [surprised] [angry] [sleepy] [thinking] [confused]';
 function parseLLM(out){
   let emotion='happy';
-  const m=out.match(/\[(happy|sad|excited|love|surprised|angry|sleepy|thinking|wink|laugh|music)\]\s*$/i);
+  const m=out.match(/\[(happy|sad|excited|love|surprised|angry|sleepy|thinking|confused|wink|laugh|music)\]\s*$/i);
   if(m){ emotion=m[1].toLowerCase(); out=out.slice(0,m.index).trim(); }
   out=out.trim().replace(/^Mimi:\s*/i,'').slice(0,320);
   if(!out) throw new Error('empty');
@@ -598,7 +612,7 @@ function setViseme(v){ Face.viseme=v; Face.draw();
   visemeTimer=setTimeout(()=>{ Face.viseme=null; Face.draw(); },260); }
 function speak(text,emotion){
   if(!voiceOn){
-    if(['happy','laugh','love','sad','angry','sleepy','surprised','excited','wink','music'].includes(emotion)) Anim.set(emotion);
+    if(['happy','laugh','love','sad','angry','sleepy','surprised','excited','confused','wink','music'].includes(emotion)) Anim.set(emotion);
     else Anim.set('idle');
     setStatus('Online'); return;
   }
@@ -616,7 +630,7 @@ function speak(text,emotion){
       if(m) setViseme(wordViseme(m[0])); }catch(e){} };
     const done=()=>{ speaking=false; Face.viseme=null; clearTimeout(visemeTimer);
       hideState(); $('stopBtn').classList.remove('show');
-      if(['happy','laugh','love','sad','angry','sleepy','surprised','excited','wink','music'].includes(emotion)) Anim.set(emotion);
+      if(['happy','laugh','love','sad','angry','sleepy','surprised','excited','confused','wink','music'].includes(emotion)) Anim.set(emotion);
       else Anim.set('idle');
       setStatus('Online'); Face.draw(); };
     u.onend=done;
