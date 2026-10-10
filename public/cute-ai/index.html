@@ -89,6 +89,26 @@
   .keybtns { display:flex; gap:8px; margin-top:8px; }
   .keybtns a, .keybtns button { flex:1; text-align:center; padding:8px; border-radius:10px; font-size:12.5px; font-weight:700; text-decoration:none; cursor:pointer; border:none; color:#fff; }
 </style>
+<script>
+/* boot diagnostic: shows on screen if 3D fails to start */
+window.__mimiReady=false;
+window.__mimiShowBootErr=function(msg){
+  var t=document.getElementById('stateTxt'),b=document.getElementById('stateBar');
+  if(t&&b){ t.textContent='⚠️ '+msg; b.classList.add('show','error'); }
+};
+window.addEventListener('error',function(e){
+  if(!window.__mimiReady&&e&&e.message)
+    window.__mimiShowBootErr('Error: '+e.message.slice(0,90));
+},true);
+window.addEventListener('unhandledrejection',function(e){
+  if(!window.__mimiReady)
+    window.__mimiShowBootErr('Load fail: '+String((e.reason&&e.reason.message)||e.reason||'').slice(0,90));
+});
+setTimeout(function(){
+  if(!window.__mimiReady)
+    window.__mimiShowBootErr('3D start nahi hua — net check karo / kuch tabs band karke refresh karo');
+},14000);
+</script>
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js",
@@ -148,7 +168,13 @@ const scene=new THREE.Scene();
 scene.fog=new THREE.Fog(0x070a18,14,30);
 const camera=new THREE.PerspectiveCamera(38,1,.1,100);
 camera.position.set(0,1.55,7.4); camera.lookAt(0,1.35,0);
-const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+let renderer;
+try{
+  renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+}catch(err){
+  window.__mimiShowBootErr('WebGL start nahi hua — kuch tabs band karke page refresh karo 🙏');
+  throw err;
+}
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 renderer.toneMapping=THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure=1.0;
@@ -268,7 +294,7 @@ const Face={
         c.beginPath(); c.arc(ex2,ey+6,18,Math.PI*1.15,Math.PI*1.85); c.stroke(); });
     } else {
       GE(()=>{ c.beginPath(); c.ellipse(ex1,ey,ew/2,eh/2,0,0,Math.PI*2); c.fill();
-        c.beginPath(); c.ellipse(ex2,ey,eh/2,0,0,Math.PI*2); c.fill();
+        c.beginPath(); c.ellipse(ex2,ey,ew/2,eh/2,0,0,Math.PI*2); c.fill();
         c.shadowBlur=0; c.fillStyle='#e8fbff';
         c.beginPath(); c.arc(ex1+5,ey-8,7,0,Math.PI*2); c.fill();
         c.beginPath(); c.arc(ex2+5,ey-8,7,0,Math.PI*2); c.fill(); });
@@ -728,6 +754,7 @@ const clock=new THREE.Clock();
   const dt=Math.min(clock.getDelta(),.05),t=clock.elapsedTime;
   Anim.update(dt,t);
   composer.render();
+  if(!window.__mimiReady){ window.__mimiReady=true; }
 })();
 fitStage();
 
