@@ -146,6 +146,11 @@
 <script type="module">
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 /* ================= SCENE ================= */
 const container=document.getElementById('scene');
@@ -156,7 +161,20 @@ camera.position.set(0,.6,9.2); camera.lookAt(0,.1,0);
 const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
 renderer.setSize(innerWidth,innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.1;
 container.appendChild(renderer.domElement);
+/* PBR reflections (glossy Unreal-style look) */
+{
+  const pmrem=new THREE.PMREMGenerator(renderer);
+  scene.environment=pmrem.fromScene(new RoomEnvironment(),.04).texture;
+}
+/* bloom composer — makes LEDs glow like the reference renders */
+const composer=new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene,camera));
+const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),.55,.45,.78);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
 scene.add(new THREE.AmbientLight(0x99aaff,.75));
 const key=new THREE.DirectionalLight(0xffffff,1.15); key.position.set(4,7,6); scene.add(key);
 const rimL=new THREE.DirectionalLight(0x38bdf8,.7); rimL.position.set(-6,3,-2); scene.add(rimL);
@@ -346,7 +364,8 @@ const robot=new THREE.Group(); scene.add(robot);
 robot.scale.setScalar(0.72); // compact size like reference images
 const headG=new THREE.Group(); robot.add(headG);
 
-const frameMat=new THREE.MeshStandardMaterial({color:0xeef2f7,roughness:.28,metalness:.15});
+const frameMat=new THREE.MeshPhysicalMaterial({color:0xeef2f7,roughness:.22,metalness:.05,
+  clearcoat:1,clearcoatRoughness:.12}); // glossy plastic like reference
 const headMesh=new THREE.Mesh(new RoundedBoxGeometry(2.5,2.15,2.1,5,.5),frameMat);
 headG.add(headMesh);
 /* dark screen */
@@ -744,13 +763,14 @@ renderer.domElement.addEventListener('pointerdown',e=>{
 addEventListener('resize',()=>{
   camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth,innerHeight);
+  composer.setSize(innerWidth,innerHeight);
 });
 const clock=new THREE.Clock();
 (function loop(){
   requestAnimationFrame(loop);
   const dt=Math.min(clock.getDelta(),.05),t=clock.elapsedTime;
   Anim.update(dt,t);
-  renderer.render(scene,camera);
+  composer.render();
 })();
 
 setTimeout(()=>{
