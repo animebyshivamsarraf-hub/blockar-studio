@@ -132,7 +132,7 @@ const container=document.getElementById('scene');
 const scene=new THREE.Scene();
 scene.fog=new THREE.Fog(0x0a0a18,16,36);
 const camera=new THREE.PerspectiveCamera(40,innerWidth/innerHeight,.1,100);
-camera.position.set(0,.4,6.4); camera.lookAt(0,.3,0);
+camera.position.set(0,.6,9.2); camera.lookAt(0,.1,0);
 const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
 renderer.setSize(innerWidth,innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));
@@ -323,6 +323,7 @@ Face.draw();
 
 /* ================= ROBOT HEAD (no body!) ================= */
 const robot=new THREE.Group(); scene.add(robot);
+robot.scale.setScalar(0.72); // compact size like reference images
 const headG=new THREE.Group(); robot.add(headG);
 
 const frameMat=new THREE.MeshStandardMaterial({color:0xeef2f7,roughness:.28,metalness:.15});
