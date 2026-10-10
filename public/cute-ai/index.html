@@ -7,7 +7,11 @@
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { height:100%; overflow:hidden; font-family:'Segoe UI',system-ui,sans-serif; }
-  body { background:radial-gradient(ellipse at 50% 35%,#232347 0%,#12122b 60%,#0a0a18 100%); color:#fff; }
+  body { background:
+    radial-gradient(ellipse 80% 55% at 50% 30%, rgba(139,92,246,.28) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 45% at 18% 65%, rgba(219,39,119,.16) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 45% at 85% 60%, rgba(56,189,248,.14) 0%, transparent 60%),
+    radial-gradient(ellipse at 50% 35%,#232347 0%,#12122b 60%,#0a0a18 100%); color:#fff; }
   #scene { position:fixed; inset:0; }
   #hdr { position:fixed; top:0; left:0; right:0; display:flex; align-items:center; justify-content:space-between;
     padding:14px 18px; z-index:10; pointer-events:none; }
@@ -43,6 +47,46 @@
   #sendBtn { width:52px; height:52px; border-radius:50%; border:none; cursor:pointer; flex-shrink:0;
     background:linear-gradient(135deg,#38bdf8,#6366f1); font-size:22px; color:#fff; }
   #hint { text-align:center; font-size:12px; color:rgba(255,255,255,.55); padding:0 0 8px; pointer-events:none; }
+  /* state bar with waveform (listening / thinking / speaking) */
+  #stateBar { display:none; align-items:center; justify-content:center; gap:10px; z-index:10;
+    margin:0 auto 8px; padding:10px 22px; border-radius:28px; pointer-events:none;
+    background:rgba(99,102,241,.18); border:1px solid rgba(139,92,246,.45);
+    backdrop-filter:blur(10px); font-size:14px; font-weight:600; width:max-content; max-width:88vw; }
+  #stateBar.show { display:flex; animation:pop .25s ease; }
+  .wave { display:flex; align-items:center; gap:3px; height:22px; }
+  .wave span { width:4px; border-radius:3px; background:linear-gradient(#7dd3fc,#c084fc); }
+  .wave.play span { animation:wv .7s ease-in-out infinite; }
+  .wave.play span:nth-child(1){height:8px;animation-delay:0s}
+  .wave.play span:nth-child(2){height:16px;animation-delay:.12s}
+  .wave.play span:nth-child(3){height:22px;animation-delay:.24s}
+  .wave.play span:nth-child(4){height:14px;animation-delay:.36s}
+  .wave.play span:nth-child(5){height:8px;animation-delay:.48s}
+  @keyframes wv { 0%,100%{transform:scaleY(.4)} 50%{transform:scaleY(1)} }
+  .tdots span { display:inline-block; width:7px; height:7px; border-radius:50%; background:#c084fc; margin:0 2px;
+    animation:tblink 1.2s infinite; }
+  .tdots span:nth-child(2){animation-delay:.2s} .tdots span:nth-child(3){animation-delay:.4s}
+  @keyframes tblink { 0%,100%{opacity:.25;transform:translateY(0)} 50%{opacity:1;transform:translateY(-4px)} }
+  /* bottom tabs */
+  #tabs { display:flex; justify-content:center; gap:6px; padding:8px 16px 0; pointer-events:auto; z-index:10; }
+  #tabs button { flex:1; max-width:130px; padding:9px 0; border-radius:14px; border:1px solid rgba(255,255,255,.14);
+    background:rgba(255,255,255,.07); color:rgba(255,255,255,.75); font-size:13px; font-weight:600; cursor:pointer; }
+  #tabs button.on { background:linear-gradient(135deg,rgba(168,85,247,.5),rgba(99,102,241,.5));
+    color:#fff; border-color:rgba(196,132,252,.6); }
+  /* settings panel */
+  #settings { display:none; margin:8px 16px 0; padding:14px 16px; border-radius:16px; z-index:10; pointer-events:auto;
+    background:rgba(20,20,45,.85); border:1px solid rgba(139,92,246,.4); backdrop-filter:blur(10px); font-size:14px; }
+  #settings.show { display:block; }
+  #settings .row { display:flex; align-items:center; justify-content:space-between; padding:8px 0;
+    border-bottom:1px solid rgba(255,255,255,.08); }
+  #settings .row:last-child { border:none; }
+  .tgl { width:52px; height:28px; border-radius:15px; border:none; cursor:pointer; position:relative;
+    background:#4c1d95; transition:background .2s; }
+  .tgl.on { background:linear-gradient(135deg,#a855f7,#6366f1); }
+  .tgl::after { content:''; position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:50%;
+    background:#fff; transition:left .2s; }
+  .tgl.on::after { left:27px; }
+  #clearChat { padding:8px 18px; border-radius:12px; border:1px solid rgba(248,113,113,.5);
+    background:rgba(248,113,113,.15); color:#fca5a5; font-size:13px; cursor:pointer; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -54,10 +98,22 @@
 <body>
 <div id="scene"></div>
 <div id="hdr">
-  <div class="name">✨ Mimi 🤖</div>
-  <div id="status"><span class="dot"></span><span id="statusTxt">ready</span></div>
+  <div class="name">✨ Mimi <span style="font-size:12px;font-weight:400;opacity:.7;-webkit-text-fill-color:rgba(255,255,255,.7)">Your AI companion</span></div>
+  <div id="status"><span class="dot"></span><span id="statusTxt">Online</span></div>
 </div>
 <div id="chat">
+  <div id="stateBar"><div class="wave" id="waveBars"><span></span><span></span><span></span><span></span><span></span></div><span id="stateTxt">Listening...</span></div>
+  <div id="msgs"></div>
+  <div id="hint">🎙️ Mic dabao aur bolo — ya type karo!</div>
+  <div id="settings">
+    <div class="row"><span>🔊 Voice jawab</span><button class="tgl on" id="tglVoice"></button></div>
+    <div class="row"><span>💬 Chat saaf karo</span><button id="clearChat">Clear</button></div>
+  </div>
+  <div id="tabs">
+    <button id="tabVoice" class="on">✨ Voice</button>
+    <button id="tabChat" class="on">💬 Chat</button>
+    <button id="tabSettings">⚙️ Settings</button>
+  </div>
   <div id="msgs"></div>
   <div id="hint">🎙️ Mic dabao aur bolo — ya type karo!</div>
   <div id="ctrl">
@@ -112,7 +168,7 @@ faceTex.colorSpace=THREE.SRGBColorSpace;
 faceTex.magFilter=THREE.NearestFilter; faceTex.minFilter=THREE.NearestFilter;
 
 const Face={
-  emotion:'normal', mouthOpen:0, lookX:0, lookY:0, blinkT:2, tearT:0,
+  emotion:'normal', mouthOpen:0, viseme:null, lookX:0, lookY:0, blinkT:2, tearT:0,
   draw(){
     const c=fx,S=FC;
     c.clearRect(0,0,S,S);
@@ -227,12 +283,20 @@ const Face={
       });
     }
 
-    /* ---- mouth (LED style) ---- */
+    /* ---- mouth: viseme-driven when speaking, else emotion ---- */
     const mx=S/2, my=S*.74;
     c.save(); c.shadowColor=E==='angry'?'#ff5a5a':'#7dd3fc'; c.shadowBlur=12;
     c.strokeStyle=E==='angry'?'#ff5a5a':'#7dd3fc';
     c.fillStyle=E==='angry'?'#ff5a5a':'#7dd3fc'; c.lineWidth=6;
-    if(this.mouthOpen>0.06){
+    const V=this.viseme; // real lip-sync: open|spread|round|closed|teeth
+    if(V){
+      if(V==='closed'){ c.beginPath(); c.moveTo(mx-12,my); c.lineTo(mx+12,my); c.stroke(); }
+      else if(V==='round'){ c.beginPath(); c.ellipse(mx,my,9,11,0,0,Math.PI*2); c.stroke(); }
+      else if(V==='spread'){ c.beginPath(); c.ellipse(mx,my,17,6,0,0,Math.PI*2); c.stroke(); }
+      else if(V==='teeth'){ c.beginPath(); c.ellipse(mx,my,12,5,0,0,Math.PI*2); c.stroke();
+        c.beginPath(); c.moveTo(mx-12,my); c.lineTo(mx+12,my); c.stroke(); }
+      else { c.beginPath(); c.ellipse(mx,my,12,17,0,0,Math.PI*2); c.fill(); } // open
+    } else if(this.mouthOpen>0.06){
       const mh=4+this.mouthOpen*20, mw=10+this.mouthOpen*10;
       c.beginPath(); c.ellipse(mx,my,mw,mh,0,0,Math.PI*2); c.fill();
     } else if(E==='happy'||E==='excited'){
@@ -388,6 +452,15 @@ function addMsg(text,who){
   while(msgs.children.length>30)msgs.removeChild(msgs.firstChild);
 }
 function setStatus(t){ $('statusTxt').textContent=t; }
+/* state bar: listening / thinking / speaking */
+function showState(s){
+  const bar=$('stateBar'), txt=$('stateTxt'), wave=$('waveBars');
+  bar.classList.add('show');
+  if(s==='listening'){ txt.textContent='Listening to you...'; wave.className='wave play'; wave.innerHTML='<span></span><span></span><span></span><span></span><span></span>'; }
+  else if(s==='speaking'){ txt.textContent='Speaking...'; wave.className='wave play'; wave.innerHTML='<span></span><span></span><span></span><span></span><span></span>'; }
+  else if(s==='thinking'){ txt.textContent='Thinking'; wave.className='tdots'; wave.innerHTML='<span></span><span></span><span></span>'; }
+}
+function hideState(){ $('stateBar').classList.remove('show'); }
 
 /* ================= BRAIN ================= */
 const BRAIN=[
@@ -425,23 +498,71 @@ function think(text){
   return {text:FALLBACK[Math.floor(Math.random()*FALLBACK.length)],e:'thinking'};
 }
 
+/* ================= VISIME LIP-SYNC (phoneme -> mouth shape) ================= */
+const PHONEME_VIS={
+  // Hindi vowels -> mouth shapes
+  'अ':'open','आ':'open','ा':'open','ऑ':'open','ॉ':'open',
+  'इ':'spread','ई':'spread','ि':'spread','ी':'spread',
+  'उ':'round','ऊ':'round','ु':'round','ू':'round',
+  'ए':'spread','े':'spread','ऐ':'spread','ै':'spread',
+  'ओ':'round','ो':'round','औ':'round','ौ':'round',
+  'अं':'open','ं':'open','ँ':'open','ः':'open','ऋ':'spread','ृ':'spread',
+  // Hindi consonants: lips close for m/b/p, teeth for f/v/s
+  'म':'closed','भ':'closed','ब':'closed','प':'closed',
+  'फ':'teeth','व':'teeth','स':'teeth','श':'teeth','ष':'teeth','ज':'teeth','झ':'teeth','च':'teeth','छ':'teeth',
+  // English vowels
+  'a':'open','e':'spread','i':'spread','o':'round','u':'round','y':'spread',
+  // English consonants
+  'm':'closed','b':'closed','p':'closed','f':'teeth','v':'teeth','s':'teeth',
+};
+function wordViseme(word){
+  const w=word.toLowerCase();
+  // pass 1: prefer vowel shapes (most visible in speech)
+  for(const ch of w){ const v=PHONEME_VIS[ch];
+    if(v==='open'||v==='round'||v==='spread') return v; }
+  // pass 2: consonant shapes
+  for(const ch of w){ const v=PHONEME_VIS[ch]; if(v) return v; }
+  return 'open';
+}
+
 /* ================= VOICE ================= */
-let speaking=false;
+let speaking=false, visemeTimer=null;
+function setViseme(v){
+  Face.viseme=v; Face.draw();
+  clearTimeout(visemeTimer);
+  visemeTimer=setTimeout(()=>{ Face.viseme=null; Face.draw(); }, 260);
+}
+let voiceOn=true;
 function speak(text,emotion){
+  if(!voiceOn){ // text only
+    if(emotion&&['happy','love','sad','angry','sleepy','surprised','excited','wink','music'].includes(emotion)) Anim.set(emotion);
+    else Anim.set('idle');
+    setStatus('Online'); return;
+  }
   try{
     speechSynthesis.cancel();
+    clearTimeout(visemeTimer); Face.viseme=null;
     const u=new SpeechSynthesisUtterance(text);
     u.lang='hi-IN'; u.rate=.95; u.pitch=1.3;
     const vs=speechSynthesis.getVoices();
     const hv=vs.find(v=>v.lang.startsWith('hi'))||vs.find(v=>v.lang.startsWith('en'));
     if(hv)u.voice=hv;
-    u.onstart=()=>{ speaking=true; Anim.set('speaking'); setStatus('bol rahi hun... 🗣️');
+    u.onstart=()=>{ speaking=true; Anim.set('speaking'); setStatus('bol rahi hun... 🗣️'); showState('speaking');
       if(emotion&&emotion!=='speaking'){Face.emotion=emotion;Face.draw();} };
-    u.onboundary=()=>{ Face.mouthOpen=.35+Math.random()*.65; Face.draw(); };
-    const done=()=>{ speaking=false; Face.mouthOpen=0;
+    // REAL lip-sync: each spoken word -> its phoneme mouth shape
+    u.onboundary=(ev)=>{
+      try{
+        const idx=ev.charIndex||0;
+        const rest=text.slice(idx);
+        const m=rest.match(/^\S+/);
+        if(m){ setViseme(wordViseme(m[0])); }
+      }catch(e){}
+    };
+    const done=()=>{ speaking=false; Face.mouthOpen=0; Face.viseme=null; clearTimeout(visemeTimer);
+      hideState();
       if(emotion&&['happy','love','sad','angry','sleepy','surprised','excited','wink','music'].includes(emotion))
         Anim.set(emotion); else Anim.set('idle');
-      setStatus('ready ✨'); Face.draw(); };
+      setStatus('Online'); Face.draw(); };
     u.onend=done; u.onerror=done;
     speechSynthesis.speak(u);
   }catch(e){ Anim.set('idle'); }
@@ -450,7 +571,7 @@ if('speechSynthesis' in window)speechSynthesis.getVoices();
 
 function replyTo(text){
   addMsg(text,'user');
-  Anim.set('thinking'); setStatus('soch rahi hun... 🤔');
+  Anim.set('thinking'); setStatus('soch rahi hun... 🤔'); showState('thinking');
   setTimeout(()=>{
     const ans=think(text);
     addMsg(ans.text,'ai');
@@ -464,17 +585,33 @@ let rec=null,listening=false;
 function toggleMic(){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR){ addMsg('Mic support nahi hai! Type karo na! 🥺','ai'); return; }
+  // INTERRUPT: agar Mimi bol rahi hai to roko aur suno
+  if(speaking){ try{ speechSynthesis.cancel(); }catch(e){}
+    speaking=false; Face.viseme=null; Face.mouthOpen=0; clearTimeout(visemeTimer); hideState(); }
   if(listening){ rec.stop(); return; }
   rec=new SR(); rec.lang='hi-IN'; rec.interimResults=false; rec.maxAlternatives=1;
   rec.onstart=()=>{ listening=true; micBtn.classList.add('listening');
-    Anim.set('listening'); setStatus('sun rahi hun... 👂'); };
-  rec.onresult=e=>{ const txt=e.results[0][0].transcript; stopListen(); replyTo(txt); };
-  rec.onerror=()=>{ stopListen(); addMsg('Sun nahi payi! 🥺 Phir bolo!','ai'); Anim.set('idle'); setStatus('ready ✨'); };
+    Anim.set('listening'); setStatus('sun rahi hun... 👂'); showState('listening'); };
+  rec.onresult=e=>{ const txt=e.results[0][0].transcript; stopListen(); hideState(); replyTo(txt); };
+  rec.onerror=()=>{ stopListen(); hideState(); addMsg('Sun nahi payi! 🥺 Phir bolo!','ai'); Anim.set('idle'); setStatus('Online'); };
   rec.onend=()=>{ if(listening)stopListen(); };
   try{ speechSynthesis.cancel(); rec.start(); }catch(e){}
 }
 function stopListen(){ listening=false; micBtn.classList.remove('listening'); }
 micBtn.onclick=toggleMic;
+/* tabs */
+const tabV=$('tabVoice'),tabC=$('tabChat'),tabS=$('tabSettings'),setP=$('settings'),msgsEl=$('msgs');
+tabV.onclick=()=>{ toggleMic(); };
+tabC.onclick=()=>{
+  const on=tabC.classList.toggle('on');
+  msgsEl.style.display=on?'flex':'none'; $('hint').style.display=on?'block':'none';
+};
+tabS.onclick=()=>{
+  const on=setP.classList.toggle('show');
+  tabS.classList.toggle('on',on);
+};
+$('tglVoice').onclick=e=>{ voiceOn=e.target.classList.toggle('on'); };
+$('clearChat').onclick=()=>{ msgsEl.innerHTML=''; };
 $('sendBtn').onclick=()=>{ const v=$('txtIn').value.trim(); if(v){$('txtIn').value='';replyTo(v);} };
 $('txtIn').addEventListener('keydown',e=>{ if(e.key==='Enter')$('sendBtn').click(); });
 
