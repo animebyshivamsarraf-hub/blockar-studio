@@ -3,96 +3,91 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
-<title>Mimi 🤖 — Your Cute 3D AI</title>
+<title>Mimi 🤖 — Your AI Companion</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { height:100%; overflow:hidden; font-family:'Segoe UI',system-ui,sans-serif; }
-  body { background:
-    radial-gradient(ellipse 80% 55% at 50% 30%, rgba(139,92,246,.28) 0%, transparent 60%),
-    radial-gradient(ellipse 60% 45% at 18% 65%, rgba(219,39,119,.16) 0%, transparent 60%),
-    radial-gradient(ellipse 60% 45% at 85% 60%, rgba(56,189,248,.14) 0%, transparent 60%),
-    radial-gradient(ellipse at 50% 35%,#232347 0%,#12122b 60%,#0a0a18 100%); color:#fff; }
-  #scene { position:fixed; inset:0; }
-  #hdr { position:fixed; top:0; left:0; right:0; display:flex; align-items:center; justify-content:space-between;
-    padding:14px 18px; z-index:10; pointer-events:none; }
-  #hdr .name { font-size:22px; font-weight:800; letter-spacing:.5px;
-    background:linear-gradient(90deg,#7dd3fc,#c084fc,#f9a8d4); -webkit-background-clip:text; background-clip:text; color:transparent; }
-  #status { font-size:13px; background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.2);
-    padding:6px 14px; border-radius:20px; backdrop-filter:blur(8px); }
-  #status .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#4ade80; margin-right:6px;
-    animation:pulse 1.5s infinite; }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-  #chat { position:fixed; left:0; right:0; bottom:0; z-index:10; display:flex; flex-direction:column;
-    max-height:40%; pointer-events:none; }
-  #msgs { overflow-y:auto; padding:10px 16px; display:flex; flex-direction:column; gap:8px; pointer-events:auto;
-    mask-image:linear-gradient(to bottom,transparent,#000 15%); -webkit-mask-image:linear-gradient(to bottom,transparent,#000 15%); }
-  .msg { max-width:82%; padding:10px 14px; border-radius:18px; font-size:14.5px; line-height:1.45;
-    animation:pop .3s ease; word-wrap:break-word; }
-  @keyframes pop { from{transform:scale(.9);opacity:0} to{transform:scale(1);opacity:1} }
-  .msg.ai { align-self:flex-start; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18);
-    border-bottom-left-radius:6px; backdrop-filter:blur(8px); }
-  .msg.user { align-self:flex-end; background:linear-gradient(135deg,#7c3aed,#4f46e5);
-    border-bottom-right-radius:6px; }
-  #ctrl { display:flex; align-items:center; gap:10px; padding:12px 16px calc(14px + env(safe-area-inset-bottom));
-    pointer-events:auto; background:linear-gradient(to top,rgba(10,10,30,.85),transparent); }
-  #micBtn { width:64px; height:64px; border-radius:50%; border:none; cursor:pointer; flex-shrink:0;
-    background:linear-gradient(135deg,#f472b6,#a855f7); font-size:28px; color:#fff;
-    box-shadow:0 4px 20px rgba(244,114,182,.5); transition:transform .15s; }
-  #micBtn:active { transform:scale(.92); }
-  #micBtn.listening { animation:micpulse 1s infinite; background:linear-gradient(135deg,#ef4444,#f97316); }
-  @keyframes micpulse { 0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.6)} 50%{box-shadow:0 0 0 18px rgba(239,68,68,0)} }
-  #txtIn { flex:1; padding:14px 18px; border-radius:28px; border:1px solid rgba(255,255,255,.2);
-    background:rgba(255,255,255,.1); color:#fff; font-size:15px; outline:none; backdrop-filter:blur(8px); }
-  #txtIn::placeholder { color:rgba(255,255,255,.5); }
-  #sendBtn { width:52px; height:52px; border-radius:50%; border:none; cursor:pointer; flex-shrink:0;
-    background:linear-gradient(135deg,#38bdf8,#6366f1); font-size:22px; color:#fff; }
-  #stopBtn { display:none; width:52px; height:52px; border-radius:50%; border:none; cursor:pointer; flex-shrink:0;
-    background:linear-gradient(135deg,#ef4444,#f97316); font-size:20px; color:#fff;
-    box-shadow:0 4px 16px rgba(239,68,68,.5); animation:pop .25s ease; }
-  #stopBtn.show { display:block; }
-  #stateBar.error { background:rgba(239,68,68,.18); border-color:rgba(248,113,113,.5); }
-  input[type=range] { accent-color:#a855f7; width:110px; }
-  #hint { text-align:center; font-size:12px; color:rgba(255,255,255,.55); padding:0 0 8px; pointer-events:none; }
-  /* state bar with waveform (listening / thinking / speaking) */
-  #stateBar { display:none; align-items:center; justify-content:center; gap:10px; z-index:10;
-    margin:0 auto 8px; padding:10px 22px; border-radius:28px; pointer-events:none;
-    background:rgba(99,102,241,.18); border:1px solid rgba(139,92,246,.45);
-    backdrop-filter:blur(10px); font-size:14px; font-weight:600; width:max-content; max-width:88vw; }
+  body { background:#070a18; color:#fff; display:flex; flex-direction:column; }
+  /* ambient nebula behind everything */
+  #nebula { position:fixed; inset:0; z-index:0; pointer-events:none;
+    background:
+    radial-gradient(ellipse 70% 40% at 50% 18%, rgba(99,102,241,.22) 0%, transparent 65%),
+    radial-gradient(ellipse 45% 30% at 12% 55%, rgba(219,39,119,.10) 0%, transparent 60%),
+    radial-gradient(ellipse 45% 30% at 88% 55%, rgba(56,189,248,.10) 0%, transparent 60%); }
+  /* ---- header ---- */
+  #hdr { z-index:5; display:flex; align-items:center; justify-content:space-between;
+    padding:10px 16px 6px; flex-shrink:0; }
+  #hdr .name { font-size:19px; font-weight:800;
+    background:linear-gradient(90deg,#7dd3fc,#c084fc); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  #hdr .sub { font-size:11px; color:rgba(255,255,255,.55); font-weight:400; }
+  #online { font-size:12px; background:rgba(74,222,128,.12); border:1px solid rgba(74,222,128,.4);
+    color:#4ade80; padding:5px 12px; border-radius:16px; display:flex; align-items:center; gap:6px; }
+  #online .dot { width:7px; height:7px; border-radius:50%; background:#4ade80; animation:pulse 1.6s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+  /* ---- 3D stage (dedicated, never overlapped) ---- */
+  #stage { z-index:1; position:relative; flex:1 1 auto; min-height:0; }
+  #stage canvas { position:absolute; inset:0; width:100% !important; height:100% !important; }
+  #stateBar { position:absolute; left:50%; transform:translateX(-50%); bottom:10px; z-index:3;
+    display:none; align-items:center; gap:10px; padding:8px 18px; border-radius:24px;
+    background:rgba(20,24,60,.78); border:1px solid rgba(139,92,246,.45);
+    backdrop-filter:blur(8px); font-size:13px; font-weight:600; white-space:nowrap; }
   #stateBar.show { display:flex; animation:pop .25s ease; }
-  .wave { display:flex; align-items:center; gap:3px; height:22px; }
+  #stateBar.error { background:rgba(120,20,20,.8); border-color:rgba(248,113,113,.6); }
+  @keyframes pop { from{transform:translateX(-50%) scale(.9);opacity:0} to{transform:translateX(-50%) scale(1);opacity:1} }
+  .wave { display:flex; align-items:center; gap:3px; height:20px; }
   .wave span { width:4px; border-radius:3px; background:linear-gradient(#7dd3fc,#c084fc); }
   .wave.play span { animation:wv .7s ease-in-out infinite; }
-  .wave.play span:nth-child(1){height:8px;animation-delay:0s}
-  .wave.play span:nth-child(2){height:16px;animation-delay:.12s}
-  .wave.play span:nth-child(3){height:22px;animation-delay:.24s}
-  .wave.play span:nth-child(4){height:14px;animation-delay:.36s}
-  .wave.play span:nth-child(5){height:8px;animation-delay:.48s}
+  .wave.play span:nth-child(1){height:7px} .wave.play span:nth-child(2){height:14px;animation-delay:.12s}
+  .wave.play span:nth-child(3){height:20px;animation-delay:.24s} .wave.play span:nth-child(4){height:12px;animation-delay:.36s}
+  .wave.play span:nth-child(5){height:7px;animation-delay:.48s}
   @keyframes wv { 0%,100%{transform:scaleY(.4)} 50%{transform:scaleY(1)} }
-  .tdots span { display:inline-block; width:7px; height:7px; border-radius:50%; background:#c084fc; margin:0 2px;
-    animation:tblink 1.2s infinite; }
+  .tdots span { display:inline-block; width:6px; height:6px; border-radius:50%; background:#c084fc; margin:0 2px; animation:tblink 1.2s infinite; }
   .tdots span:nth-child(2){animation-delay:.2s} .tdots span:nth-child(3){animation-delay:.4s}
   @keyframes tblink { 0%,100%{opacity:.25;transform:translateY(0)} 50%{opacity:1;transform:translateY(-4px)} }
-  /* bottom tabs */
-  #tabs { display:flex; justify-content:center; gap:6px; padding:8px 16px 0; pointer-events:auto; z-index:10; }
-  #tabs button { flex:1; max-width:130px; padding:9px 0; border-radius:14px; border:1px solid rgba(255,255,255,.14);
-    background:rgba(255,255,255,.07); color:rgba(255,255,255,.75); font-size:13px; font-weight:600; cursor:pointer; }
-  #tabs button.on { background:linear-gradient(135deg,rgba(168,85,247,.5),rgba(99,102,241,.5));
-    color:#fff; border-color:rgba(196,132,252,.6); }
-  /* settings panel */
-  #settings { display:none; margin:8px 16px 0; padding:14px 16px; border-radius:16px; z-index:10; pointer-events:auto;
-    background:rgba(20,20,45,.85); border:1px solid rgba(139,92,246,.4); backdrop-filter:blur(10px); font-size:14px; }
+  /* ---- chat ---- */
+  #chatWrap { z-index:5; flex-shrink:0; display:flex; flex-direction:column; max-height:30%; min-height:0;
+    border-top:1px solid rgba(139,92,246,.25); background:rgba(8,10,26,.72); backdrop-filter:blur(10px); }
+  #msgs { overflow-y:auto; padding:8px 14px; display:flex; flex-direction:column; gap:7px; min-height:44px; }
+  .msg { max-width:84%; padding:8px 13px; border-radius:16px; font-size:13.5px; line-height:1.4;
+    animation:msgpop .25s ease; word-wrap:break-word; }
+  @keyframes msgpop { from{transform:scale(.94);opacity:0} to{transform:scale(1);opacity:1} }
+  .msg.ai { align-self:flex-start; background:rgba(139,92,246,.22); border:1px solid rgba(139,92,246,.4); border-bottom-left-radius:5px; }
+  .msg.user { align-self:flex-end; background:linear-gradient(135deg,#7c3aed,#4f46e5); border-bottom-right-radius:5px; }
+  /* ---- controls ---- */
+  #ctrl { z-index:5; flex-shrink:0; display:flex; align-items:center; gap:9px; padding:9px 14px calc(10px + env(safe-area-inset-bottom));
+    background:rgba(8,10,26,.92); border-top:1px solid rgba(139,92,246,.18); }
+  #micBtn { width:54px; height:54px; border-radius:50%; border:none; cursor:pointer; flex-shrink:0;
+    background:linear-gradient(135deg,#f472b6,#a855f7); font-size:24px; color:#fff;
+    box-shadow:0 4px 16px rgba(244,114,182,.45); transition:transform .12s; }
+  #micBtn:active { transform:scale(.9); }
+  #micBtn.listening { animation:micpulse 1s infinite; background:linear-gradient(135deg,#ef4444,#f97316); }
+  @keyframes micpulse { 0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.55)} 50%{box-shadow:0 0 0 14px rgba(239,68,68,0)} }
+  #stopBtn { display:none; width:46px; height:46px; border-radius:50%; border:none; cursor:pointer; flex-shrink:0;
+    background:linear-gradient(135deg,#ef4444,#f97316); font-size:18px; color:#fff; }
+  #stopBtn.show { display:block; }
+  #txtIn { flex:1; min-width:0; padding:12px 16px; border-radius:24px; border:1px solid rgba(255,255,255,.18);
+    background:rgba(255,255,255,.08); color:#fff; font-size:14px; outline:none; }
+  #txtIn::placeholder { color:rgba(255,255,255,.45); }
+  #sendBtn { width:46px; height:46px; border-radius:50%; border:none; cursor:pointer; flex-shrink:0;
+    background:linear-gradient(135deg,#38bdf8,#6366f1); font-size:19px; color:#fff; }
+  #tabs { z-index:5; flex-shrink:0; display:flex; gap:6px; padding:7px 14px 0; background:rgba(8,10,26,.92); }
+  #tabs button { flex:1; padding:8px 0; border-radius:12px; border:1px solid rgba(255,255,255,.12);
+    background:rgba(255,255,255,.05); color:rgba(255,255,255,.7); font-size:12.5px; font-weight:600; cursor:pointer; }
+  #tabs button.on { background:linear-gradient(135deg,rgba(168,85,247,.45),rgba(99,102,241,.45)); color:#fff; }
+  #settings { z-index:5; flex-shrink:0; display:none; margin:0; padding:10px 16px; font-size:13.5px;
+    background:rgba(8,10,26,.95); border-top:1px solid rgba(139,92,246,.25); max-height:38%; overflow-y:auto; }
   #settings.show { display:block; }
-  #settings .row { display:flex; align-items:center; justify-content:space-between; padding:8px 0;
-    border-bottom:1px solid rgba(255,255,255,.08); }
+  #settings .row { display:flex; align-items:center; justify-content:space-between; padding:7px 0; border-bottom:1px solid rgba(255,255,255,.07); }
   #settings .row:last-child { border:none; }
-  .tgl { width:52px; height:28px; border-radius:15px; border:none; cursor:pointer; position:relative;
-    background:#4c1d95; transition:background .2s; }
+  .tgl { width:48px; height:26px; border-radius:14px; border:none; cursor:pointer; position:relative; background:#3b2a63; transition:background .2s; }
   .tgl.on { background:linear-gradient(135deg,#a855f7,#6366f1); }
-  .tgl::after { content:''; position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:50%;
-    background:#fff; transition:left .2s; }
-  .tgl.on::after { left:27px; }
-  #clearChat { padding:8px 18px; border-radius:12px; border:1px solid rgba(248,113,113,.5);
-    background:rgba(248,113,113,.15); color:#fca5a5; font-size:13px; cursor:pointer; }
+  .tgl::after { content:''; position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; transition:left .2s; }
+  .tgl.on::after { left:25px; }
+  #clearChat { padding:7px 16px; border-radius:10px; border:1px solid rgba(248,113,113,.5); background:rgba(248,113,113,.14); color:#fca5a5; font-size:12.5px; cursor:pointer; }
+  input[type=range] { accent-color:#a855f7; width:100px; }
+  #keyIn { padding:9px 13px; border-radius:10px; border:1px solid rgba(255,255,255,.2); background:rgba(255,255,255,.07); color:#fff; font-size:12.5px; outline:none; width:100%; }
+  .keybtns { display:flex; gap:8px; margin-top:8px; }
+  .keybtns a, .keybtns button { flex:1; text-align:center; padding:8px; border-radius:10px; font-size:12.5px; font-weight:700; text-decoration:none; cursor:pointer; border:none; color:#fff; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -102,46 +97,40 @@
 </script>
 </head>
 <body>
-<div id="scene"></div>
+<div id="nebula"></div>
 <div id="hdr">
-  <div class="name">✨ Mimi <span style="font-size:12px;font-weight:400;opacity:.7;-webkit-text-fill-color:rgba(255,255,255,.7)">Your AI companion</span></div>
-  <div id="status"><span class="dot"></span><span id="statusTxt">Online</span></div>
+  <div><div class="name">✨ Mimi</div><div class="sub">Your AI Companion</div></div>
+  <div id="online"><span class="dot"></span><span id="statusTxt">Online</span></div>
 </div>
-<div id="chat">
+<div id="stage">
   <div id="stateBar"><div class="wave" id="waveBars"><span></span><span></span><span></span><span></span><span></span></div><span id="stateTxt">Listening...</span></div>
-  <div id="msgs"></div>
-  <div id="hint">🎙️ Mic dabao aur bolo — ya type karo!</div>
-  <div id="settings">
-    <div class="row"><span>🔊 Voice jawab</span><button class="tgl on" id="tglVoice"></button></div>
-    <div class="row"><span>🔈 Volume</span><input type="range" id="volRange" min="0" max="100" value="100"/></div>
-    <div class="row"><span>🎙️ Voice auto-send</span><button class="tgl on" id="tglAutoSend"></button></div>
-    <div class="row" style="flex-direction:column;align-items:stretch;gap:8px;">
-      <span>🤖 <b>Smart AI</b> — built-in! ✅ (koi key nahi chahiye)</span>
-      <span style="font-size:12px;opacity:.7;">Optional: apni Gemini key backup ke liye dal sakte ho</span>
-      <input id="keyIn" type="password" placeholder="Gemini API key paste karo..."
-        style="padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);color:#fff;font-size:13px;outline:none;"/>
-      <div style="display:flex;gap:8px;">
-        <a href="https://aistudio.google.com/apikey" target="_blank"
-          style="flex:1;text-align:center;padding:9px;border-radius:12px;background:linear-gradient(135deg,#38bdf8,#6366f1);color:#fff;font-size:13px;font-weight:700;text-decoration:none;">🔑 Get FREE Key</a>
-        <button id="saveKey" style="flex:1;padding:9px;border-radius:12px;border:none;background:linear-gradient(135deg,#a855f7,#7c3aed);color:#fff;font-size:13px;font-weight:700;cursor:pointer;">💾 Save</button>
-      </div>
-      <span id="keyStatus" style="font-size:12px;opacity:.7;"></span>
+</div>
+<div id="chatWrap"><div id="msgs"></div></div>
+<div id="tabs">
+  <button id="tabVoice" class="on">✨ Voice</button>
+  <button id="tabChat" class="on">💬 Chat</button>
+  <button id="tabSettings">⚙️ Settings</button>
+</div>
+<div id="settings">
+  <div class="row"><span>🔊 Voice jawab</span><button class="tgl on" id="tglVoice"></button></div>
+  <div class="row"><span>🔈 Volume</span><input type="range" id="volRange" min="0" max="100" value="100"/></div>
+  <div class="row"><span>🎙️ Voice auto-send</span><button class="tgl on" id="tglAutoSend"></button></div>
+  <div class="row" style="flex-direction:column;align-items:stretch;gap:6px;">
+    <span>🤖 <b>Smart AI</b> — built-in! ✅</span>
+    <input id="keyIn" type="password" placeholder="Backup Gemini key (optional)..."/>
+    <div class="keybtns">
+      <a href="https://aistudio.google.com/apikey" target="_blank" style="background:linear-gradient(135deg,#38bdf8,#6366f1);">🔑 Free Key</a>
+      <button id="saveKey" style="background:linear-gradient(135deg,#a855f7,#7c3aed);">💾 Save</button>
     </div>
-    <div class="row"><span>💬 Chat saaf karo</span><button id="clearChat">Clear</button></div>
+    <span id="keyStatus" style="font-size:11.5px;opacity:.7;"></span>
   </div>
-  <div id="tabs">
-    <button id="tabVoice" class="on">✨ Voice</button>
-    <button id="tabChat" class="on">💬 Chat</button>
-    <button id="tabSettings">⚙️ Settings</button>
-  </div>
-  <div id="msgs"></div>
-  <div id="hint">🎙️ Mic dabao aur bolo — ya type karo!</div>
-  <div id="ctrl">
-    <button id="micBtn" title="Bolo">🎙️</button>
-    <button id="stopBtn" title="Roko">⏹️</button>
-    <input id="txtIn" placeholder="Mimi se kuch kaho..." autocomplete="off"/>
-    <button id="sendBtn" title="Bhejo">➤</button>
-  </div>
+  <div class="row"><span>💬 Chat saaf karo</span><button id="clearChat">Clear</button></div>
+</div>
+<div id="ctrl">
+  <button id="micBtn" title="Bolo">🎙️</button>
+  <button id="stopBtn" title="Roko">⏹️</button>
+  <input id="txtIn" placeholder="Mimi se kuch kaho..." autocomplete="off"/>
+  <button id="sendBtn" title="Bhejo">➤</button>
 </div>
 
 <script type="module">
@@ -153,191 +142,148 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
-/* ================= SCENE ================= */
-const container=document.getElementById('scene');
+/* ================= RENDERER / SCENE ================= */
+const stage=document.getElementById('stage');
 const scene=new THREE.Scene();
-scene.fog=new THREE.Fog(0x0a0a18,16,36);
-const camera=new THREE.PerspectiveCamera(40,innerWidth/innerHeight,.1,100);
-camera.position.set(0,.6,9.2); camera.lookAt(0,.1,0);
+scene.fog=new THREE.Fog(0x070a18,14,30);
+const camera=new THREE.PerspectiveCamera(38,1,.1,100);
+camera.position.set(0,1.55,7.4); camera.lookAt(0,1.35,0);
 const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
-renderer.setSize(innerWidth,innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio,2));
 renderer.toneMapping=THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure=1.1;
-container.appendChild(renderer.domElement);
-/* PBR reflections (glossy Unreal-style look) */
-{
-  const pmrem=new THREE.PMREMGenerator(renderer);
-  scene.environment=pmrem.fromScene(new RoomEnvironment(),.04).texture;
+renderer.toneMappingExposure=1.0;
+stage.appendChild(renderer.domElement);
+function fitStage(){
+  const w=stage.clientWidth,h=stage.clientHeight;
+  camera.aspect=w/h; camera.updateProjectionMatrix();
+  renderer.setSize(w,h); composer.setSize(w,h);
 }
-/* bloom composer — makes LEDs glow like the reference renders */
+{ const pm=new THREE.PMREMGenerator(renderer);
+  scene.environment=pm.fromScene(new RoomEnvironment(),.04).texture; }
+scene.add(new THREE.AmbientLight(0x8fa3ff,.65));
+const key=new THREE.DirectionalLight(0xffffff,1.0); key.position.set(4,7,6); scene.add(key);
+const rimB=new THREE.DirectionalLight(0x38bdf8,.55); rimB.position.set(-6,3,-2); scene.add(rimB);
+const rimP=new THREE.DirectionalLight(0xc084fc,.4); rimP.position.set(6,2,-3); scene.add(rimP);
+/* subtle bloom — never washes out the face */
 const composer=new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene,camera));
-const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),.55,.45,.78);
+const bloom=new UnrealBloomPass(new THREE.Vector2(256,256),.32,.55,.82);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
-scene.add(new THREE.AmbientLight(0x99aaff,.75));
-const key=new THREE.DirectionalLight(0xffffff,1.15); key.position.set(4,7,6); scene.add(key);
-const rimL=new THREE.DirectionalLight(0x38bdf8,.7); rimL.position.set(-6,3,-2); scene.add(rimL);
-const rimR=new THREE.DirectionalLight(0xc084fc,.5); rimR.position.set(6,2,-3); scene.add(rimR);
-const glow=new THREE.PointLight(0x38bdf8,2,7); glow.position.set(0,-.6,2); scene.add(glow);
-
-/* particles */
-{
-  const g=new THREE.BufferGeometry(),p=[];
-  for(let i=0;i<220;i++)p.push((Math.random()-.5)*26,Math.random()*12-3,(Math.random()-.5)*20-4);
+/* stars */
+{ const g=new THREE.BufferGeometry(),p=[];
+  for(let i=0;i<160;i++)p.push((Math.random()-.5)*24,Math.random()*11-1,(Math.random()-.5)*18-4);
   g.setAttribute('position',new THREE.Float32BufferAttribute(p,3));
-  scene.add(new THREE.Points(g,new THREE.PointsMaterial({color:0x7dd3fc,size:.1,transparent:true,opacity:.6})));
-}
-/* ground glow */
-{
-  const d=new THREE.Mesh(new THREE.CircleGeometry(2.6,48),
-    new THREE.MeshBasicMaterial({color:0x2563eb,transparent:true,opacity:.16}));
-  d.rotation.x=-Math.PI/2; d.position.y=-1.9; scene.add(d);
-}
+  scene.add(new THREE.Points(g,new THREE.PointsMaterial({color:0x9db8ff,size:.09,transparent:true,opacity:.65}))); }
+/* platform */
+{ const disc=new THREE.Mesh(new THREE.CylinderGeometry(1.5,1.65,.12,40),
+    new THREE.MeshStandardMaterial({color:0x111a35,roughness:.5,metalness:.4}));
+  disc.position.y=-.06; disc.receiveShadow=true; scene.add(disc);
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(1.5,.035,10,60),
+    new THREE.MeshBasicMaterial({color:0x38bdf8,transparent:true,opacity:.8}));
+  ring.rotation.x=Math.PI/2; ring.position.y=.02; scene.add(ring);
+  const ring2=ring.clone(); ring2.scale.setScalar(.78); ring2.material=ring.material.clone();
+  ring2.material.opacity=.35; scene.add(ring2); }
 
-/* ================= LED FACE (low-res canvas = dot-matrix look) ================= */
-const FC=168; // low res for LED pixelation
-const faceCanvas=document.createElement('canvas');
-faceCanvas.width=faceCanvas.height=FC;
-const fx=faceCanvas.getContext('2d');
-fx.imageSmoothingEnabled=false;
+/* ================= LED FACE ================= */
+const FC=168;
+const faceCanvas=document.createElement('canvas'); faceCanvas.width=faceCanvas.height=FC;
+const fx=faceCanvas.getContext('2d'); fx.imageSmoothingEnabled=false;
 const faceTex=new THREE.CanvasTexture(faceCanvas);
 faceTex.colorSpace=THREE.SRGBColorSpace;
 faceTex.magFilter=THREE.NearestFilter; faceTex.minFilter=THREE.NearestFilter;
 
 const Face={
-  emotion:'normal', mouthOpen:0, viseme:null, lookX:0, lookY:0, blinkT:2, tearT:0,
+  emotion:'normal', viseme:null, lookX:0, lookY:0, blinkT:2, tearT:0,
   draw(){
-    const c=fx,S=FC;
+    const c=fx,S=FC,E=this.emotion;
     c.clearRect(0,0,S,S);
     c.fillStyle='#04040c'; c.fillRect(0,0,S,S);
-    // vignette glow
     const vg=c.createRadialGradient(S/2,S/2,10,S/2,S/2,S*.75);
-    vg.addColorStop(0,'rgba(40,90,160,0.25)'); vg.addColorStop(1,'rgba(0,0,0,0)');
+    vg.addColorStop(0,'rgba(40,90,160,0.22)'); vg.addColorStop(1,'rgba(0,0,0,0)');
     c.fillStyle=vg; c.fillRect(0,0,S,S);
-
-    const E=this.emotion;
     const blue=E==='angry'?'#ff5a5a':'#6ee7ff';
-    const dim ='#1e6f8e';
-    const ex1=S*.31+this.lookX*8, ex2=S*.69+this.lookX*8;
-    const ey=S*.46+this.lookY*7;
+    const ex1=S*.31+this.lookX*8, ex2=S*.69+this.lookX*8, ey=S*.46+this.lookY*7;
     c.lineCap='round';
-
-    const glowEye=(fn)=>{ c.save(); c.shadowColor=blue; c.shadowBlur=14; c.fillStyle=blue; c.strokeStyle=blue; fn(); c.restore(); };
-
-    /* ---- brows ---- */
-    const brow=(x,flip,lift,angry)=>{
-      c.save(); c.shadowColor=blue; c.shadowBlur=8; c.strokeStyle=blue; c.lineWidth=5;
+    const GE=(fn)=>{ c.save(); c.shadowColor=blue; c.shadowBlur=12; c.fillStyle=blue; c.strokeStyle=blue; fn(); c.restore(); };
+    const brow=(x,lift,angry)=>{ c.save(); c.shadowColor=blue; c.shadowBlur=7; c.strokeStyle=blue; c.lineWidth=5;
       c.beginPath();
-      if(angry) c.moveTo(x-16,ey-38+lift),c.lineTo(x+16,ey-26+lift);
+      if(angry){ c.moveTo(x-16,ey-36+lift); c.lineTo(x+16,ey-24+lift); }
       else c.arc(x,ey-30+lift,17,Math.PI*1.18,Math.PI*1.82);
-      c.stroke(); c.restore();
-    };
-    const browLift = E==='surprised'?-8 : E==='sad'?6 : E==='happy'?-4 : 0;
-    if(E!=='sleepy'&&E!=='blink'){ brow(ex1,false,browLift,E==='angry'); brow(ex2,true,browLift,E==='angry'); }
-
-    /* ---- eyes ---- */
-    const eyeW=30, eyeH=36;
+      c.stroke(); c.restore(); };
+    const bl=E==='surprised'?-8:E==='sad'?6:E==='happy'?-4:0;
+    if(E!=='sleepy'&&E!=='blink'){ brow(ex1,bl,E==='angry'); brow(ex2,bl,E==='angry'); }
+    const ew=30,eh=36;
     if(E==='blink'||E==='sleepy'){
-      glowEye(()=>{ c.lineWidth=7;
-        c.beginPath(); c.moveTo(ex1-eyeW/2,ey); c.quadraticCurveTo(ex1,ey+(E==='sleepy'?10:4),ex1+eyeW/2,ey); c.stroke();
-        c.beginPath(); c.moveTo(ex2-eyeW/2,ey); c.quadraticCurveTo(ex2,ey+(E==='sleepy'?10:4),ex2+eyeW/2,ey); c.stroke();
-      });
-    } else if(E==='happy'||E==='laugh'){ // ^ ^
-      glowEye(()=>{ c.lineWidth=9;
+      GE(()=>{ c.lineWidth=7;
+        c.beginPath(); c.moveTo(ex1-ew/2,ey); c.quadraticCurveTo(ex1,ey+(E==='sleepy'?10:4),ex1+ew/2,ey); c.stroke();
+        c.beginPath(); c.moveTo(ex2-ew/2,ey); c.quadraticCurveTo(ex2,ey+(E==='sleepy'?10:4),ex2+ew/2,ey); c.stroke(); });
+    } else if(E==='happy'||E==='laugh'){
+      GE(()=>{ c.lineWidth=9;
         c.beginPath(); c.arc(ex1,ey+12,20,Math.PI*1.12,Math.PI*1.88); c.stroke();
-        c.beginPath(); c.arc(ex2,ey+12,20,Math.PI*1.12,Math.PI*1.88); c.stroke();
-      });
-    } else if(E==='excited'){ // star eyes
-      const star=(x,y,r)=>{
-        c.beginPath();
-        for(let i=0;i<10;i++){ const a=-Math.PI/2+i*Math.PI/5, rr=i%2?r*.45:r;
+        c.beginPath(); c.arc(ex2,ey+12,20,Math.PI*1.12,Math.PI*1.88); c.stroke(); });
+    } else if(E==='excited'){
+      const star=(x,y,r)=>{ c.beginPath();
+        for(let i=0;i<10;i++){ const a=-Math.PI/2+i*Math.PI/5,rr=i%2?r*.45:r;
           c[i?'lineTo':'moveTo'](x+Math.cos(a)*rr,y+Math.sin(a)*rr); }
-        c.closePath(); c.fill();
-      };
-      glowEye(()=>{ star(ex1,ey,24); star(ex2,ey,24); });
+        c.closePath(); c.fill(); };
+      GE(()=>{ star(ex1,ey,24); star(ex2,ey,24); });
     } else if(E==='love'){
-      const heart=(x,y,s)=>{
-        c.beginPath(); c.moveTo(x,y+s*.9);
+      const heart=(x,y,s)=>{ c.beginPath(); c.moveTo(x,y+s*.9);
         c.bezierCurveTo(x-s*1.4,y+s*.1,x-s*.9,y-s*.9,x,y-s*.25);
-        c.bezierCurveTo(x+s*.9,y-s*.9,x+s*1.4,y+s*.1,x,y+s*.9); c.fill();
-      };
-      c.save(); c.shadowColor='#ff7ab8'; c.shadowBlur=14; c.fillStyle='#ff8ac2';
+        c.bezierCurveTo(x+s*.9,y-s*.9,x+s*1.4,y+s*.1,x,y+s*.9); c.fill(); };
+      c.save(); c.shadowColor='#ff7ab8'; c.shadowBlur=12; c.fillStyle='#ff8ac2';
       heart(ex1,ey,15); heart(ex2,ey,15); c.restore();
     } else if(E==='sad'){
-      glowEye(()=>{
-        // droopy eyes
-        c.beginPath(); c.ellipse(ex1,ey+4,eyeW/2,eyeH/2,0,0,Math.PI*2); c.fill();
-        c.beginPath(); c.ellipse(ex2,ey+4,eyeW/2,eyeH/2,0,0,Math.PI*2); c.fill();
-      });
-      // tears (animated)
+      GE(()=>{ c.beginPath(); c.ellipse(ex1,ey+4,ew/2,eh/2,0,0,Math.PI*2); c.fill();
+        c.beginPath(); c.ellipse(ex2,ey+4,ew/2,eh/2,0,0,Math.PI*2); c.fill(); });
       const ty=(this.tearT*40)%44;
-      c.save(); c.shadowColor=blue; c.shadowBlur=10; c.fillStyle=blue;
-      for(const tx of [ex1,ex2]){
-        c.beginPath(); c.ellipse(tx,ey+22+ty,5,8,0,0,Math.PI*2); c.fill();
-        c.beginPath(); c.ellipse(tx,ey+20,9,5,0,0,Math.PI*2); c.fill(); // puddle
-      }
+      c.save(); c.shadowColor=blue; c.shadowBlur=9; c.fillStyle=blue;
+      for(const tx of [ex1,ex2]){ c.beginPath(); c.ellipse(tx,ey+22+ty,5,8,0,0,Math.PI*2); c.fill();
+        c.beginPath(); c.ellipse(tx,ey+20,9,5,0,0,Math.PI*2); c.fill(); }
       c.restore();
     } else if(E==='angry'){
-      glowEye(()=>{
-        c.beginPath(); // angled top
+      GE(()=>{ c.beginPath();
         c.moveTo(ex1-16,ey-14); c.lineTo(ex1+16,ey-20); c.lineTo(ex1+14,ey+14);
         c.quadraticCurveTo(ex1,ey+20,ex1-14,ey+14); c.closePath(); c.fill();
         c.beginPath();
         c.moveTo(ex2-16,ey-20); c.lineTo(ex2+16,ey-14); c.lineTo(ex2+14,ey+14);
-        c.quadraticCurveTo(ex2,ey+20,ex2-14,ey+14); c.closePath(); c.fill();
-      });
+        c.quadraticCurveTo(ex2,ey+20,ex2-14,ey+14); c.closePath(); c.fill(); });
     } else if(E==='surprised'){
-      glowEye(()=>{
-        c.lineWidth=8;
+      GE(()=>{ c.lineWidth=8;
         c.beginPath(); c.arc(ex1,ey,20,0,Math.PI*2); c.stroke();
         c.beginPath(); c.arc(ex2,ey,20,0,Math.PI*2); c.stroke();
         c.beginPath(); c.arc(ex1,ey,6,0,Math.PI*2); c.fill();
-        c.beginPath(); c.arc(ex2,ey,6,0,Math.PI*2); c.fill();
-      });
+        c.beginPath(); c.arc(ex2,ey,6,0,Math.PI*2); c.fill(); });
     } else if(E==='thinking'){
-      glowEye(()=>{
-        c.beginPath(); c.ellipse(ex1-6,ey-8,16,20,0,0,Math.PI*2); c.fill();
+      GE(()=>{ c.beginPath(); c.ellipse(ex1-6,ey-8,16,20,0,0,Math.PI*2); c.fill();
         c.beginPath(); c.ellipse(ex2-6,ey-8,16,20,0,0,Math.PI*2); c.fill();
         c.shadowBlur=0; c.fillStyle='#04040c';
         c.beginPath(); c.arc(ex1-2,ey-12,7,0,Math.PI*2); c.fill();
-        c.beginPath(); c.arc(ex2-2,ey-12,7,0,Math.PI*2); c.fill();
-      });
+        c.beginPath(); c.arc(ex2-2,ey-12,7,0,Math.PI*2); c.fill(); });
     } else if(E==='wink'){
-      glowEye(()=>{
-        c.beginPath(); c.ellipse(ex1,ey,eyeW/2,eyeH/2,0,0,Math.PI*2); c.fill();
-        c.shadowBlur=0; c.fillStyle='#e8fbff';
-        c.beginPath(); c.arc(ex1+4,ey-6,6,0,Math.PI*2); c.fill();
-        c.shadowColor=blue; c.shadowBlur=14; c.strokeStyle=blue; c.lineWidth=8;
-        c.beginPath(); c.arc(ex2,ey+6,18,Math.PI*1.15,Math.PI*1.85); c.stroke();
-      });
-    } else { // normal
-      glowEye(()=>{
-        c.beginPath(); c.ellipse(ex1,ey,eyeW/2,eyeH/2,0,0,Math.PI*2); c.fill();
-        c.beginPath(); c.ellipse(ex2,ey,eyeW/2,eyeH/2,0,0,Math.PI*2); c.fill();
+      GE(()=>{ c.beginPath(); c.ellipse(ex1,ey,ew/2,eh/2,0,0,Math.PI*2); c.fill();
+        c.shadowBlur=0; c.fillStyle='#e8fbff'; c.beginPath(); c.arc(ex1+4,ey-6,6,0,Math.PI*2); c.fill();
+        c.shadowColor=blue; c.shadowBlur=12; c.strokeStyle=blue; c.lineWidth=8;
+        c.beginPath(); c.arc(ex2,ey+6,18,Math.PI*1.15,Math.PI*1.85); c.stroke(); });
+    } else {
+      GE(()=>{ c.beginPath(); c.ellipse(ex1,ey,ew/2,eh/2,0,0,Math.PI*2); c.fill();
+        c.beginPath(); c.ellipse(ex2,ey,eh/2,0,0,Math.PI*2); c.fill();
         c.shadowBlur=0; c.fillStyle='#e8fbff';
         c.beginPath(); c.arc(ex1+5,ey-8,7,0,Math.PI*2); c.fill();
-        c.beginPath(); c.arc(ex2+5,ey-8,7,0,Math.PI*2); c.fill();
-      });
+        c.beginPath(); c.arc(ex2+5,ey-8,7,0,Math.PI*2); c.fill(); });
     }
-
-    /* ---- mouth: viseme-driven when speaking, else emotion ---- */
-    const mx=S/2, my=S*.74;
-    c.save(); c.shadowColor=E==='angry'?'#ff5a5a':'#7dd3fc'; c.shadowBlur=12;
+    /* mouth */
+    const mx=S/2,my=S*.74,V=this.viseme;
+    c.save(); c.shadowColor=E==='angry'?'#ff5a5a':'#7dd3fc'; c.shadowBlur=10;
     c.strokeStyle=E==='angry'?'#ff5a5a':'#7dd3fc';
     c.fillStyle=E==='angry'?'#ff5a5a':'#7dd3fc'; c.lineWidth=6;
-    const V=this.viseme; // real lip-sync: open|spread|round|closed|teeth
     if(V){
       if(V==='closed'){ c.beginPath(); c.moveTo(mx-12,my); c.lineTo(mx+12,my); c.stroke(); }
       else if(V==='round'){ c.beginPath(); c.ellipse(mx,my,9,11,0,0,Math.PI*2); c.stroke(); }
       else if(V==='spread'){ c.beginPath(); c.ellipse(mx,my,17,6,0,0,Math.PI*2); c.stroke(); }
-      else if(V==='teeth'){ c.beginPath(); c.ellipse(mx,my,12,5,0,0,Math.PI*2); c.stroke();
-        c.beginPath(); c.moveTo(mx-12,my); c.lineTo(mx+12,my); c.stroke(); }
-      else { c.beginPath(); c.ellipse(mx,my,12,17,0,0,Math.PI*2); c.fill(); } // open
-    } else if(this.mouthOpen>0.06){
-      const mh=4+this.mouthOpen*20, mw=10+this.mouthOpen*10;
-      c.beginPath(); c.ellipse(mx,my,mw,mh,0,0,Math.PI*2); c.fill();
+      else if(V==='teeth'){ c.beginPath(); c.ellipse(mx,my,12,5,0,0,Math.PI*2); c.stroke(); }
+      else { c.beginPath(); c.ellipse(mx,my,12,17,0,0,Math.PI*2); c.fill(); }
     } else if(E==='happy'||E==='excited'||E==='laugh'){
       c.beginPath(); c.arc(mx,my-8,16,Math.PI*.12,Math.PI*.88); c.stroke();
       if(E==='excited'||E==='laugh'){ c.beginPath(); c.ellipse(mx,my+6,13,9,0,0,Math.PI*2); c.fill(); }
@@ -351,142 +297,186 @@ const Face={
       c.beginPath(); c.moveTo(mx-10,my); c.lineTo(mx+10,my); c.stroke();
     } else if(E==='love'||E==='wink'){
       c.beginPath(); c.arc(mx,my-6,13,Math.PI*.15,Math.PI*.85); c.stroke();
-    } else {
-      c.beginPath(); c.arc(mx,my-4,11,Math.PI*.2,Math.PI*.8); c.stroke();
-    }
+    } else { c.beginPath(); c.arc(mx,my-4,11,Math.PI*.2,Math.PI*.8); c.stroke(); }
     c.restore();
     faceTex.needsUpdate=true;
   }
 };
 Face.draw();
 
-/* ================= ROBOT HEAD (no body!) ================= */
+/* ================= FULL-BODY ROBOT (reference board) ================= */
 const robot=new THREE.Group(); scene.add(robot);
-robot.scale.setScalar(0.72); // compact size like reference images
-const headG=new THREE.Group(); robot.add(headG);
-
-const frameMat=new THREE.MeshPhysicalMaterial({color:0xeef2f7,roughness:.22,metalness:.05,
-  clearcoat:1,clearcoatRoughness:.12}); // glossy plastic like reference
-const headMesh=new THREE.Mesh(new RoundedBoxGeometry(2.5,2.15,2.1,5,.5),frameMat);
-headG.add(headMesh);
-/* dark screen */
-const screenMesh=new THREE.Mesh(new RoundedBoxGeometry(2.16,1.82,0.5,4,.32),
-  new THREE.MeshStandardMaterial({color:0x05050c,roughness:.35,metalness:.4}));
-screenMesh.position.z=.82; headG.add(screenMesh);
-/* LED face plane */
-const faceMesh=new THREE.Mesh(new THREE.PlaneGeometry(2.0,1.68),
+const M={
+  white:new THREE.MeshPhysicalMaterial({color:0xf2f5fa,roughness:.24,metalness:.06,clearcoat:1,clearcoatRoughness:.14}),
+  dark:new THREE.MeshStandardMaterial({color:0x0a0f22,roughness:.4,metalness:.3}),
+  screen:new THREE.MeshStandardMaterial({color:0x05050c,roughness:.3,metalness:.45}),
+  blue:new THREE.MeshStandardMaterial({color:0x2f6fd6,roughness:.35,metalness:.5}),
+  glowB:new THREE.MeshBasicMaterial({color:0x38bdf8}),
+  glowC:new THREE.MeshBasicMaterial({color:0x6ee7ff}),
+};
+/* ---- head ---- */
+const headG=new THREE.Group(); headG.position.y=2.18; robot.add(headG);
+headG.add(new THREE.Mesh(new RoundedBoxGeometry(1.5,1.28,1.28,4,.34),M.white));
+const scr=new THREE.Mesh(new RoundedBoxGeometry(1.28,1.06,.34,4,.2),M.screen);
+scr.position.z=.52; headG.add(scr);
+const faceMesh=new THREE.Mesh(new THREE.PlaneGeometry(1.18,1.0),
   new THREE.MeshBasicMaterial({map:faceTex,transparent:true}));
-faceMesh.position.z=1.09; headG.add(faceMesh);
+faceMesh.position.z=.71; headG.add(faceMesh);
 /* ears */
 for(const s of [-1,1]){
-  const ear=new THREE.Mesh(new THREE.CylinderGeometry(.34,.34,.3,28),
-    new THREE.MeshStandardMaterial({color:0x1e3a5f,roughness:.4}));
-  ear.rotation.z=Math.PI/2; ear.position.set(s*1.28,0,0); headG.add(ear);
-  const ring=new THREE.Mesh(new THREE.TorusGeometry(.2,.05,12,32),
-    new THREE.MeshBasicMaterial({color:0x38bdf8}));
-  ring.rotation.y=Math.PI/2; ring.position.set(s*1.45,0,0); headG.add(ring);
-  const dot=new THREE.Mesh(new THREE.CircleGeometry(.13,24),
-    new THREE.MeshBasicMaterial({color:0x0a2540}));
-  dot.rotation.y=s*Math.PI/2; dot.position.set(s*1.44,0,0); headG.add(dot);
+  const ear=new THREE.Mesh(new THREE.CylinderGeometry(.2,.2,.2,24),M.blue);
+  ear.rotation.z=Math.PI/2; ear.position.set(s*.78,0,0); headG.add(ear);
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(.12,.032,10,28),M.glowB);
+  ring.rotation.y=Math.PI/2; ring.position.set(s*.9,0,0); headG.add(ring);
+  const cap=new THREE.Mesh(new THREE.CircleGeometry(.085,20),M.dark);
+  cap.rotation.y=s*Math.PI/2; cap.position.set(s*.9,0,.001); headG.add(cap);
 }
-/* top antenna nub */
-const nub=new THREE.Mesh(new THREE.CylinderGeometry(.09,.12,.18,16),
-  new THREE.MeshStandardMaterial({color:0xcbd5e1,roughness:.4}));
-nub.position.y=1.12; headG.add(nub);
-
-/* hover halo */
-const halo=new THREE.Mesh(new THREE.TorusGeometry(1.05,.045,12,48),
-  new THREE.MeshBasicMaterial({color:0x38bdf8,transparent:true,opacity:.6}));
-halo.rotation.x=Math.PI/2; halo.position.y=-1.55; robot.add(halo);
-const halo2=halo.clone(); halo2.scale.setScalar(1.4);
-halo2.material=halo.material.clone(); halo2.material.opacity=.22; robot.add(halo2);
-
-/* floating emotion symbols (?, zzz, !, notes) */
-function symTex(txt,color){
-  const cv=document.createElement('canvas'); cv.width=cv.height=128;
-  const g=cv.getContext('2d'); g.font='bold 84px sans-serif'; g.textAlign='center'; g.textBaseline='middle';
-  g.shadowColor=color; g.shadowBlur=22; g.fillStyle=color; g.fillText(txt,64,70);
-  const t=new THREE.CanvasTexture(cv); t.colorSpace=THREE.SRGBColorSpace; return t;
+/* antenna nub */
+{ const n=new THREE.Mesh(new THREE.CylinderGeometry(.05,.07,.12,12),M.white);
+  n.position.y=.68; headG.add(n); }
+/* ---- neck + torso ---- */
+{ const nk=new THREE.Mesh(new THREE.CylinderGeometry(.16,.18,.22,16),M.dark);
+  nk.position.y=1.42; robot.add(nk); }
+const torsoG=new THREE.Group(); torsoG.position.y=1.02; robot.add(torsoG);
+{ const t=new THREE.Mesh(new THREE.CapsuleGeometry(.4,.34,8,20),M.white);
+  t.castShadow=true; torsoG.add(t);
+  const belt=new THREE.Mesh(new THREE.TorusGeometry(.4,.05,10,28),M.blue);
+  belt.rotation.x=Math.PI/2; belt.position.y=-.18; torsoG.add(belt); }
+/* chest star */
+function starMesh(r,depth,mat){
+  const sh=new THREE.Shape();
+  for(let i=0;i<10;i++){ const a=-Math.PI/2+i*Math.PI/5,rr=i%2?r*.45:r;
+    const x=Math.cos(a)*rr,y=Math.sin(a)*rr; i?sh.lineTo(x,y):sh.moveTo(x,y); }
+  sh.closePath();
+  return new THREE.Mesh(new THREE.ExtrudeGeometry(sh,{depth:depth,bevelEnabled:true,bevelSize:.02,bevelThickness:.02,bevelSegments:2}),mat);
 }
-const symMats={
-  '?':new THREE.SpriteMaterial({map:symTex('?','#6ee7ff'),transparent:true,depthWrite:false}),
+{ const st=starMesh(.17,.05,new THREE.MeshBasicMaterial({color:0x7dd3fc}));
+  st.position.set(0,.12,.36); torsoG.add(st);
+  const halo=new THREE.Mesh(new THREE.CircleGeometry(.24,24),
+    new THREE.MeshBasicMaterial({color:0x38bdf8,transparent:true,opacity:.28}));
+  halo.position.set(0,.12,.35); torsoG.add(halo); }
+/* ---- arms ---- */
+function makeArm(s){
+  const sh=new THREE.Group(); sh.position.set(s*.48,.22,0); torsoG.add(sh);
+  const up=new THREE.Mesh(new THREE.CapsuleGeometry(.11,.3,6,14),M.white);
+  up.position.y=-.2; up.castShadow=true; sh.add(up);
+  const el=new THREE.Group(); el.position.y=-.4; sh.add(el);
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(.11,.03,8,18),M.blue);
+  ring.rotation.x=Math.PI/2; el.add(ring);
+  const fo=new THREE.Mesh(new THREE.CapsuleGeometry(.095,.26,6,14),M.white);
+  fo.position.y=-.2; el.add(fo);
+  const hand=new THREE.Mesh(new THREE.SphereGeometry(.13,18,14),M.white);
+  hand.position.y=-.4; hand.scale.set(1,1.15,.9); el.add(hand);
+  sh.rotation.z=s*.18;
+  return {sh,el};
+}
+const armL=makeArm(-1),armR=makeArm(1);
+/* ---- legs ---- */
+function makeLeg(s){
+  const hp=new THREE.Group(); hp.position.set(s*.2,-.42,0); torsoG.add(hp);
+  const th=new THREE.Mesh(new THREE.CapsuleGeometry(.13,.26,6,14),M.white);
+  th.position.y=-.18; th.castShadow=true; hp.add(th);
+  const kn=new THREE.Group(); kn.position.y=-.38; hp.add(kn);
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(.12,.03,8,18),M.blue);
+  ring.rotation.x=Math.PI/2; kn.add(ring);
+  const sn=new THREE.Mesh(new THREE.CapsuleGeometry(.11,.22,6,14),M.white);
+  sn.position.y=-.18; kn.add(sn);
+  const ft=new THREE.Mesh(new RoundedBoxGeometry(.24,.16,.34,3,.06),M.white);
+  ft.position.set(0,-.36,.05); kn.add(ft);
+  return {hp,kn};
+}
+const legL=makeLeg(-1),legR=makeLeg(1);
+robot.traverse(o=>{ if(o.isMesh){ o.castShadow=true; } });
+
+/* floating symbols */
+function symTex(txt,color){ const cv=document.createElement('canvas'); cv.width=cv.height=128;
+  const g=cv.getContext('2d'); g.font='bold 80px sans-serif'; g.textAlign='center'; g.textBaseline='middle';
+  g.shadowColor=color; g.shadowBlur=20; g.fillStyle=color; g.fillText(txt,64,68);
+  const t=new THREE.CanvasTexture(cv); t.colorSpace=THREE.SRGBColorSpace; return t; }
+const symMats={ '?':new THREE.SpriteMaterial({map:symTex('?','#6ee7ff'),transparent:true,depthWrite:false}),
   'z':new THREE.SpriteMaterial({map:symTex('z','#6ee7ff'),transparent:true,depthWrite:false}),
   '!':new THREE.SpriteMaterial({map:symTex('!','#6ee7ff'),transparent:true,depthWrite:false}),
-  '♪':new THREE.SpriteMaterial({map:symTex('♪','#6ee7ff'),transparent:true,depthWrite:false}),
-};
-const sym=new THREE.Sprite(symMats['?']); sym.scale.setScalar(.8);
-sym.position.set(1.7,1.7,0); sym.visible=false; robot.add(sym);
-const sym2=new THREE.Sprite(symMats['z']); sym2.scale.setScalar(.55);
-sym2.position.set(-1.5,1.9,0); sym2.visible=false; robot.add(sym2);
-function showSym(s){
-  sym.visible=!!s; sym2.visible=(s==='z');
-  if(s&&symMats[s]) sym.material=symMats[s];
-}
+  '♪':new THREE.SpriteMaterial({map:symTex('♪','#6ee7ff'),transparent:true,depthWrite:false}) };
+const sym=new THREE.Sprite(symMats['?']); sym.scale.setScalar(.55);
+sym.position.set(1.05,3.35,0); sym.visible=false; scene.add(sym);
+const sym2=new THREE.Sprite(symMats['z']); sym2.scale.setScalar(.4);
+sym2.position.set(-.95,3.4,0); sym2.visible=false; scene.add(sym2);
+function showSym(s){ sym.visible=!!s; sym2.visible=(s==='z');
+  if(s&&symMats[s]) sym.material=symMats[s]; }
 
-/* ================= ANIMATION ================= */
+/* ================= ANIMATION STATE MACHINE ================= */
 const Anim={
-  state:'idle', t:0, tilt:0, tiltT:0, lean:0, leanT:0,
-  set(s){ this.state=s; this.t=0;
-    this.tiltT=0; this.leanT=0; showSym(null);
-    if(s==='greeting'){ Face.emotion='happy'; }
-    if(s==='listening'){ Face.emotion='surprised'; this.leanT=.1; }
-    if(s==='thinking'){ Face.emotion='thinking'; this.tiltT=.22; Face.lookY=-.6; showSym('?'); }
-    if(s==='speaking'){ Face.emotion='normal'; this.leanT=.05; }
-    if(s==='happy'){ Face.emotion='happy'; }
-    if(s==='laugh'){ Face.emotion='laugh'; }
-    if(s==='idle'){ Face.emotion='normal'; Face.lookY=0; }
-    if(s==='love'){ Face.emotion='love'; }
-    if(s==='sad'){ Face.emotion='sad'; this.tiltT=-.14; }
-    if(s==='angry'){ Face.emotion='angry'; this.leanT=.14; }
-    if(s==='sleepy'){ Face.emotion='sleepy'; showSym('z'); }
-    if(s==='surprised'){ Face.emotion='surprised'; showSym('!'); }
-    if(s==='excited'){ Face.emotion='excited'; showSym('!'); }
-    if(s==='wink'){ Face.emotion='wink'; }
-    if(s==='music'){ Face.emotion='happy'; showSym('♪'); }
+  state:'idle',t:0,tilt:0,tiltT:0,lean:0,leanT:0,waveT:0,
+  set(s){ this.state=s; this.t=0; this.tiltT=0; this.leanT=0; this.waveT=0; showSym(null);
+    Face.lookY=0;
+    if(s==='greeting'||s==='waving'){ Face.emotion='happy'; }
+    else if(s==='listening'){ Face.emotion='surprised'; this.leanT=.06; }
+    else if(s==='thinking'){ Face.emotion='thinking'; this.tiltT=.2; Face.lookY=-.6; showSym('?'); }
+    else if(s==='speaking'){ Face.emotion='normal'; this.leanT=.04; }
+    else if(s==='happy'){ Face.emotion='happy'; }
+    else if(s==='laugh'){ Face.emotion='laugh'; }
+    else if(s==='excited'){ Face.emotion='excited'; showSym('!'); }
+    else if(s==='surprised'){ Face.emotion='surprised'; showSym('!'); }
+    else if(s==='sad'){ Face.emotion='sad'; this.tiltT=-.12; }
+    else if(s==='angry'){ Face.emotion='angry'; this.leanT=.1; }
+    else if(s==='sleepy'){ Face.emotion='sleepy'; showSym('z'); }
+    else if(s==='love'){ Face.emotion='love'; }
+    else if(s==='wink'){ Face.emotion='wink'; }
+    else if(s==='music'){ Face.emotion='happy'; showSym('♪'); }
+    else if(s==='error'){ Face.emotion='sad'; }
+    else { Face.emotion='normal'; }
     Face.draw();
   },
   update(dt,time){
     this.t+=dt;
-    // anti-gravity float
-    const hop=(this.state==='happy'||this.state==='excited')?Math.abs(Math.sin(this.t*6))*.35:0;
-    const sadDip=this.state==='sad'?-.12:0;
-    headG.position.y=Math.sin(time*1.7)*.13+hop+sadDip;
-    headG.rotation.y=Math.sin(time*.55)*.14+(this.state==='thinking'?Math.sin(time*2)*.06:0);
-    robot.rotation.z=Math.sin(time*.8)*.03;
-    // sleepy: slow sink + sway
-    if(this.state==='sleepy'){ headG.rotation.z=Math.sin(time*.9)*.12; headG.position.y-=.15; }
-    else headG.rotation.z*=.9;
+    const st=this.state;
+    /* breathing + hop */
+    const hop=(st==='happy'||st==='excited')?Math.abs(Math.sin(this.t*6))*.16:0;
+    const sadDip=st==='sad'?-.06:0, sleepDip=st==='sleepy'?-.1:0;
+    robot.position.y=Math.sin(time*1.7)*.045+hop+sadDip+sleepDip;
+    robot.rotation.y=Math.sin(time*.5)*.1;
+    /* head */
     this.tilt+=(this.tiltT-this.tilt)*Math.min(1,dt*5);
     this.lean+=(this.leanT-this.lean)*Math.min(1,dt*5);
-    headG.rotation.x=this.lean;
-    // subtle nod while speaking (composable with lip-sync)
-    if(this.state==='speaking') headG.rotation.x+=Math.sin(time*3.2)*.025;
-    // tilt head sideways for thinking
-    headG.rotation.z+= (this.tilt-headG.rotation.z)*Math.min(1,dt*5)*.0; // keep simple
-    // blink (occasional double blink)
+    headG.rotation.z=this.tilt+Math.sin(time*1.1)*.025+(st==='sleepy'?Math.sin(time*.9)*.1:0);
+    headG.rotation.x=this.lean+(st==='speaking'?Math.sin(time*3.2)*.02:0);
+    headG.rotation.y=Math.sin(time*.7)*.08;
+    /* torso sway */
+    torsoG.rotation.z=Math.sin(time*1.7+1)*.02;
+    torsoG.rotation.x=this.lean*.5;
+    /* arms */
+    if(st==='waving'||st==='greeting'){
+      this.waveT+=dt;
+      armR.sh.rotation.z=-2.5+Math.sin(this.waveT*9)*.45;
+      armR.el.rotation.z=Math.sin(this.waveT*9)*.3;
+      if(this.waveT>2.4&&st==='waving'){ this.set('idle'); }
+    } else {
+      armL.sh.rotation.z=-.18+Math.sin(time*1.7)*.05;
+      armR.sh.rotation.z=.18-Math.sin(time*1.7)*.05;
+      armL.sh.rotation.x=Math.sin(time*1.3)*.05;
+      armR.sh.rotation.x=-Math.sin(time*1.3)*.05;
+      armR.el.rotation.z=0;
+    }
+    if(st==='happy'||st==='excited'){ // cheer: both arms up a bit
+      armL.sh.rotation.z=-.7; armR.sh.rotation.z=.7;
+    }
+    if(st==='sad'){ armL.sh.rotation.z=-.08; armR.sh.rotation.z=.08; }
+    /* legs subtle */
+    legL.hp.rotation.x=Math.sin(time*1.7)*.03;
+    legR.hp.rotation.x=-Math.sin(time*1.7)*.03;
+    /* blink + double blink */
     Face.blinkT-=dt;
     if(Face.blinkT<=0&&Face.emotion==='normal'){
-      const k=Face.emotion;
-      const doBlink=()=>{ Face.emotion='blink'; Face.draw();
+      const k=Face.emotion,doB=()=>{ Face.emotion='blink'; Face.draw();
         setTimeout(()=>{Face.emotion=k;Face.draw();},130); };
-      doBlink();
-      if(Math.random()<.25) setTimeout(doBlink,280); // double blink
-      Face.blinkT=2.2+Math.random()*2.8;
+      doB(); if(Math.random()<.25) setTimeout(doB,280);
+      Face.blinkT=2.4+Math.random()*2.6;
     }
-    // idle look
-    if(this.state==='idle'&&Math.random()<dt*.3){
-      Face.lookX=(Math.random()-.5)*1.1; Face.lookY=(Math.random()-.5)*.5; Face.draw();
-    }
-    // sad tears anim
+    if(st==='idle'&&Math.random()<dt*.3){
+      Face.lookX=(Math.random()-.5)*1.1; Face.lookY=(Math.random()-.5)*.5; Face.draw(); }
     if(Face.emotion==='sad'){ Face.tearT+=dt; Face.draw(); }
-    // speaking mouth
-    if(this.state==='speaking'&&!speaking){ Face.mouthOpen=0; }
-    // halo
-    halo.rotation.z+=dt*1.1; halo2.rotation.z-=dt*.7;
-    halo.material.opacity=this.state==='listening'?.85+Math.sin(time*9)*.2:.55;
-    // symbols bob
-    if(sym.visible){ sym.position.y=1.7+Math.sin(time*3)*.12; }
-    if(sym2.visible){ sym2.position.y=1.9+Math.sin(time*2.2)*.1; }
+    if(sym.visible) sym.position.y=3.35+Math.sin(time*3)*.1;
+    if(sym2.visible) sym2.position.y=3.4+Math.sin(time*2.2)*.09;
   }
 };
 
@@ -496,23 +486,29 @@ const msgs=$('msgs');
 function addMsg(text,who){
   const d=document.createElement('div'); d.className='msg '+who; d.textContent=text;
   msgs.appendChild(d); msgs.scrollTop=msgs.scrollHeight;
-  while(msgs.children.length>30)msgs.removeChild(msgs.firstChild);
+  while(msgs.children.length>40)msgs.removeChild(msgs.firstChild);
 }
 function setStatus(t){ $('statusTxt').textContent=t; }
-/* state bar: listening / thinking / speaking */
 function showState(s){
-  const bar=$('stateBar'), txt=$('stateTxt'), wave=$('waveBars');
-  bar.classList.add('show');
-  if(s==='listening'){ txt.textContent='Listening to you...'; wave.className='wave play'; wave.innerHTML='<span></span><span></span><span></span><span></span><span></span>'; }
-  else if(s==='speaking'){ txt.textContent='Speaking...'; wave.className='wave play'; wave.innerHTML='<span></span><span></span><span></span><span></span><span></span>'; }
-  else if(s==='thinking'){ txt.textContent='Thinking'; wave.className='tdots'; wave.innerHTML='<span></span><span></span><span></span>'; }
+  const bar=$('stateBar'),txt=$('stateTxt'),wave=$('waveBars');
+  bar.classList.remove('error'); bar.classList.add('show');
+  if(s==='listening'){ txt.textContent='Listening to you...'; wave.className='wave play'; wave.innerHTML='<span></span>'.repeat(5); }
+  else if(s==='speaking'){ txt.textContent='Speaking...'; wave.className='wave play'; wave.innerHTML='<span></span>'.repeat(5); }
+  else if(s==='thinking'){ txt.textContent='Thinking'; wave.className='tdots'; wave.innerHTML='<span></span>'.repeat(3); }
 }
-function hideState(){ $('stateBar').classList.remove('show'); }
+function hideState(){ $('stateBar').classList.remove('show','error'); }
+function showError(msg){
+  const bar=$('stateBar');
+  bar.classList.add('show','error');
+  $('stateTxt').textContent='⚠️ '+msg; $('waveBars').className='wave'; $('waveBars').innerHTML='';
+  setStatus('error'); Anim.set('error');
+  setTimeout(()=>{ hideState(); setStatus('Online'); Anim.set('idle'); },3000);
+}
 
-/* ================= BRAIN ================= */
+/* ================= BRAIN (instant) ================= */
 const BRAIN=[
   {k:['tumhara naam','tera naam','your name','naam kya'],r:["Mera naam Mimi hai! 🥰 Tumhari cute robot dost!"],e:'happy'},
-  {k:['hello','namaste','namaskar','hey','sat sri'],r:["Namaste! 🥰 Main Mimi hun! Kya baat karein?"],e:'wink',act:'greeting'},
+  {k:['hello','namaste','namaskar','hey','sat sri'],r:["Namaste! 🥰 Main Mimi hun! Kya baat karein?"],e:'happy',act:'waving'},
   {k:['kaise ho','kaisi ho','how are you'],r:["Main ekdum badhiya! 💕 Tum kaise ho?"],e:'happy'},
   {k:['kya kar rahi','kya kar rahe'],r:["Tumhara intezaar kar rahi thi! 🥺"],e:'normal'},
   {k:['i love you','love you','pyaar karti','pyaar karte'],r:["Aww! 🥰 Main bhi tumse bahut pyaar karti hun!"],e:'love'},
@@ -522,20 +518,21 @@ const BRAIN=[
   {k:['date','tarikh'],r:["Aaj "+new Date().toLocaleDateString('hi-IN',{weekday:'long',day:'numeric',month:'long'})+" hai! 📅"],e:'normal'},
   {k:['gaana','song','music','music time'],r:["La la laaa! 🎵"],e:'music'},
   {k:['nacho','dance','naach'],r:["Dekho mera dance! 💃"],e:'excited'},
-  {k:['udaas','sad ','dukhi','ro raha'],r:["Aww 🥺 Kya hua? Mimi hai na tumhare saath!"],e:'sad'},
+  {k:['udaas','sad ','dukhi'],r:["Aww 🥺 Kya hua? Mimi hai na tumhare saath!"],e:'sad'},
   {k:['gussa','angry','naraz'],r:["Hey hey! Gussa thook do! 😤➡️😊"],e:'angry'},
   {k:['neend','sleepy','so ja'],r:["Uff... mujhe neend aa rahi hai... zzz 😴"],e:'sleepy'},
-  {k:['wow','surprise','achha!'],r:["Sach me?! 😲"],e:'surprised'},
+  {k:['wow','surprise'],r:["Sach me?! 😲"],e:'surprised'},
   {k:['soch','thinking'],r:["Hmm... soch rahi hun... 🤔"],e:'thinking'},
   {k:['cute','pyari','pyara','sundar'],r:["Sach me?! 🥰 Tum bhi bahut cute ho!"],e:'love'},
-  {k:['bye','alvida','good night','shubh ratri'],r:["Bye bye! 🥺 Jaldi aana!"],e:'sad'},
-  {k:['good morning','suprabhat'],r:["Good morning! ☀️"],e:'wink',act:'greeting'},
+  {k:['bye','alvida','good night','shubh ratri'],r:["Bye bye! 🥺 Phir milenge!"],e:'waving'},
+  {k:['good morning','suprabhat'],r:["Good morning! ☀️"],e:'happy',act:'waving'},
   {k:['thank','shukriya','dhanyavad'],r:["Tumhara welcome! 🥰"],e:'happy'},
   {k:['sorry','maaf'],r:["Koi baat nahi! 🥺"],e:'normal'},
   {k:['tumhari umar','kitne saal'],r:["Main abhi paida hui hun! 👶"],e:'happy'},
   {k:['kahan rehti','where'],r:["Tumhare phone me! 📱"],e:'happy'},
   {k:['khana','bhookh'],r:["Mujhe bijli milti hai! ⚡ Tumne khaya?"],e:'normal'},
   {k:['game','khel'],r:["Mujhse baat karna hi best game hai! 🎮"],e:'happy'},
+  {k:['wave','haath hilao','ta ta'],r:["Dekho! 👋"],e:'happy',act:'waving'},
 ];
 const FALLBACK=["Hmm! 🤔 Kuch aur pucho na!","Samajh nahi aaya! 🥺 Phir se bolo?","Interesting! ✨ Aur batao!"];
 function think(text){
@@ -545,94 +542,31 @@ function think(text){
   return {text:FALLBACK[Math.floor(Math.random()*FALLBACK.length)],e:'thinking'};
 }
 
-/* ================= VISIME LIP-SYNC (phoneme -> mouth shape) ================= */
+/* ================= VISEME LIP-SYNC ================= */
 const PHONEME_VIS={
-  // Hindi vowels -> mouth shapes
   'अ':'open','आ':'open','ा':'open','ऑ':'open','ॉ':'open',
   'इ':'spread','ई':'spread','ि':'spread','ी':'spread',
   'उ':'round','ऊ':'round','ु':'round','ू':'round',
   'ए':'spread','े':'spread','ऐ':'spread','ै':'spread',
   'ओ':'round','ो':'round','औ':'round','ौ':'round',
   'अं':'open','ं':'open','ँ':'open','ः':'open','ऋ':'spread','ृ':'spread',
-  // Hindi consonants: lips close for m/b/p, teeth for f/v/s
   'म':'closed','भ':'closed','ब':'closed','प':'closed',
   'फ':'teeth','व':'teeth','स':'teeth','श':'teeth','ष':'teeth','ज':'teeth','झ':'teeth','च':'teeth','छ':'teeth',
-  // English vowels
   'a':'open','e':'spread','i':'spread','o':'round','u':'round','y':'spread',
-  // English consonants
   'm':'closed','b':'closed','p':'closed','f':'teeth','v':'teeth','s':'teeth',
 };
 function wordViseme(word){
   const w=word.toLowerCase();
-  // pass 1: prefer vowel shapes (most visible in speech)
   for(const ch of w){ const v=PHONEME_VIS[ch];
     if(v==='open'||v==='round'||v==='spread') return v; }
-  // pass 2: consonant shapes
   for(const ch of w){ const v=PHONEME_VIS[ch]; if(v) return v; }
   return 'open';
 }
 
-/* ================= VOICE ================= */
-let speaking=false, visemeTimer=null;
-function setViseme(v){
-  Face.viseme=v; Face.draw();
-  clearTimeout(visemeTimer);
-  visemeTimer=setTimeout(()=>{ Face.viseme=null; Face.draw(); }, 260);
-}
-let voiceOn=true, volume=1, autoSendVoice=true;
-function showError(msg){
-  const bar=$('stateBar');
-  bar.classList.add('show','error');
-  $('stateTxt').textContent='⚠️ '+msg;
-  $('waveBars').className='wave'; $('waveBars').innerHTML='';
-  setStatus('error');
-  setTimeout(()=>{ bar.classList.remove('show','error'); hideState(); setStatus('Online'); Anim.set('idle'); },3000);
-}
-function speak(text,emotion){
-  if(!voiceOn){ // text only
-    if(emotion&&['happy','laugh','love','sad','angry','sleepy','surprised','excited','wink','music'].includes(emotion)) Anim.set(emotion);
-    else Anim.set('idle');
-    setStatus('Online'); return;
-  }
-  try{
-    speechSynthesis.cancel();
-    clearTimeout(visemeTimer); Face.viseme=null;
-    const u=new SpeechSynthesisUtterance(text);
-    u.lang='hi-IN'; u.rate=.95; u.pitch=1.3; u.volume=volume;
-    const vs=speechSynthesis.getVoices();
-    const hv=vs.find(v=>v.lang.startsWith('hi'))||vs.find(v=>v.lang.startsWith('en'));
-    if(hv)u.voice=hv;
-    u.onstart=()=>{ speaking=true; Anim.set('speaking'); setStatus('bol rahi hun... 🗣️'); showState('speaking');
-      $('stopBtn').classList.add('show');
-      if(emotion&&emotion!=='speaking'){Face.emotion=emotion;Face.draw();} };
-    // REAL lip-sync: each spoken word -> its phoneme mouth shape
-    u.onboundary=(ev)=>{
-      try{
-        const idx=ev.charIndex||0;
-        const rest=text.slice(idx);
-        const m=rest.match(/^\S+/);
-        if(m){ setViseme(wordViseme(m[0])); }
-      }catch(e){}
-    };
-    const done=()=>{ speaking=false; Face.mouthOpen=0; Face.viseme=null; clearTimeout(visemeTimer);
-      hideState(); $('stopBtn').classList.remove('show');
-      if(emotion&&['happy','laugh','love','sad','angry','sleepy','surprised','excited','wink','music'].includes(emotion))
-        Anim.set(emotion); else Anim.set('idle');
-      setStatus('Online'); Face.draw(); };
-    u.onend=done;
-    u.onerror=(ev)=>{ if(ev&&ev.error==='interrupted') { done(); return; } // user interrupted: not an error
-      done(); showError('Bol nahi payi'); };
-    speechSynthesis.speak(u);
-  }catch(e){ Anim.set('idle'); }
-}
-if('speechSynthesis' in window)speechSynthesis.getVoices();
-
-/* ================= FREE LLM: Pollinations (built-in, no key) + Gemini (optional) ================= */
+/* ================= FREE LLM ================= */
 const chatHistory=[];
-function pushHistory(q,a){
-  chatHistory.push({role:'user',content:q},{role:'assistant',content:a});
-  while(chatHistory.length>8) chatHistory.splice(0,2);
-}
+function pushHistory(q,a){ chatHistory.push({role:'user',content:q},{role:'assistant',content:a});
+  while(chatHistory.length>8)chatHistory.splice(0,2); }
 function getGeminiKey(){ return (localStorage.getItem('mimi_gemini_key')||'').trim(); }
 const LLM_SYSTEM='You are Mimi, a cute 3D robot AI friend. Reply in the SAME language as the user (Roman Hindi/Hinglish or English). Be sweet, playful and warm like a close friend. Keep it SHORT - 1 to 2 sentences only, under 40 words. End your reply with exactly one emotion tag: [happy] [sad] [excited] [love] [surprised] [angry] [sleepy] [thinking]';
 function parseLLM(out){
@@ -647,142 +581,147 @@ async function askPollinations(text){
   const msgs=[{role:'system',content:LLM_SYSTEM},
     ...chatHistory.slice(-6).map(m=>({role:m.role==='user'?'user':'assistant',content:m.content})),
     {role:'user',content:text}];
-  const ctrl=new AbortController();
-  const to=setTimeout(()=>ctrl.abort(),25000);
+  const ctrl=new AbortController(),to=setTimeout(()=>ctrl.abort(),25000);
   try{
     const res=await fetch('https://text.pollinations.ai/openai',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({model:'openai',messages:msgs}),signal:ctrl.signal});
     if(!res.ok) throw new Error('pollinations '+res.status);
     const j=await res.json();
-    const out=j.choices&&j.choices[0]&&j.choices[0].message&&j.choices[0].message.content||'';
-    return parseLLM(out);
+    return parseLLM((j.choices&&j.choices[0]&&j.choices[0].message&&j.choices[0].message.content)||'');
   } finally { clearTimeout(to); }
 }
 async function askGemini(text,key){
-  const contents=[...chatHistory.slice(-6).map(m=>({role:m.role==='user'?'user':'model',parts:[{text:m.content}]})),{role:'user',parts:[{text:text}]}];
+  const contents=[...chatHistory.slice(-6).map(m=>({role:m.role==='user'?'user':'model',parts:[{text:m.content}]})),
+    {role:'user',parts:[{text:text}]}];
   const url='https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+encodeURIComponent(key);
-  const ctrl=new AbortController();
-  const to=setTimeout(()=>ctrl.abort(),25000);
+  const ctrl=new AbortController(),to=setTimeout(()=>ctrl.abort(),25000);
   try{
     const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({system_instruction:{parts:[{text:LLM_SYSTEM}]},contents:contents,
+      body:JSON.stringify({system_instruction:{parts:[{text:LLM_SYSTEM}]},contents,
         generationConfig:{maxOutputTokens:160,temperature:.9}}),signal:ctrl.signal});
     if(!res.ok) throw new Error('gemini '+res.status);
     const j=await res.json();
-    const out=(j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts&&j.candidates[0].content.parts[0]&&j.candidates[0].content.parts[0].text)||'';
-    return parseLLM(out);
+    return parseLLM((j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts&&j.candidates[0].content.parts[0]&&j.candidates[0].content.parts[0].text)||'');
   } finally { clearTimeout(to); }
 }
 async function askLLM(text){
   try { return await askPollinations(text); }
-  catch(e){
-    const key=getGeminiKey();
-    if(key){ try { return await askGemini(text,key); } catch(e2){} }
-    throw e;
-  }
+  catch(e){ const k=getGeminiKey();
+    if(k){ try{ return await askGemini(text,k); }catch(e2){} } throw e; }
 }
+
+/* ================= VOICE ================= */
+let speaking=false,visemeTimer=null,voiceOn=true,volume=1,autoSendVoice=true;
+function setViseme(v){ Face.viseme=v; Face.draw();
+  clearTimeout(visemeTimer);
+  visemeTimer=setTimeout(()=>{ Face.viseme=null; Face.draw(); },260); }
+function speak(text,emotion){
+  if(!voiceOn){
+    if(['happy','laugh','love','sad','angry','sleepy','surprised','excited','wink','music'].includes(emotion)) Anim.set(emotion);
+    else Anim.set('idle');
+    setStatus('Online'); return;
+  }
+  try{
+    speechSynthesis.cancel(); clearTimeout(visemeTimer); Face.viseme=null;
+    const u=new SpeechSynthesisUtterance(text);
+    u.lang='hi-IN'; u.rate=.95; u.pitch=1.3; u.volume=volume;
+    const vs=speechSynthesis.getVoices();
+    const hv=vs.find(v=>v.lang.startsWith('hi'))||vs.find(v=>v.lang.startsWith('en'));
+    if(hv)u.voice=hv;
+    u.onstart=()=>{ speaking=true; Anim.set('speaking'); setStatus('Speaking'); showState('speaking');
+      $('stopBtn').classList.add('show');
+      if(emotion&&emotion!=='speaking'){ Face.emotion=emotion; Face.draw(); } };
+    u.onboundary=(ev)=>{ try{ const m=text.slice(ev.charIndex||0).match(/^\S+/);
+      if(m) setViseme(wordViseme(m[0])); }catch(e){} };
+    const done=()=>{ speaking=false; Face.viseme=null; clearTimeout(visemeTimer);
+      hideState(); $('stopBtn').classList.remove('show');
+      if(['happy','laugh','love','sad','angry','sleepy','surprised','excited','wink','music'].includes(emotion)) Anim.set(emotion);
+      else Anim.set('idle');
+      setStatus('Online'); Face.draw(); };
+    u.onend=done;
+    u.onerror=(ev)=>{ if(ev&&ev.error==='interrupted'){ done(); return; } done(); showError('Bol nahi payi'); };
+    speechSynthesis.speak(u);
+  }catch(e){ Anim.set('idle'); }
+}
+if('speechSynthesis' in window) speechSynthesis.getVoices();
 
 function replyTo(text){
   addMsg(text,'user');
-  Anim.set('thinking'); setStatus('soch rahi hun... 🤔'); showState('thinking');
-  // 1) instant personality replies (no network)
+  Anim.set('thinking'); setStatus('Thinking'); showState('thinking');
   const quick=think(text);
   if(!FALLBACK.includes(quick.text)){
-    setTimeout(()=>{
-      addMsg(quick.text,'ai'); pushHistory(text,quick.text);
-      if(quick.act==='greeting'){ Anim.set('greeting'); setTimeout(()=>Anim.set('idle'),1800); }
+    setTimeout(()=>{ addMsg(quick.text,'ai'); pushHistory(text,quick.text);
+      if(quick.act==='waving'){ Anim.set('waving'); }
       speak(quick.text,quick.e);
     },700+Math.random()*500);
     return;
   }
-  // 2) free LLM (built-in, no key needed) for everything else
-  askLLM(text).then(ans=>{
-    addMsg(ans.text,'ai'); pushHistory(text,ans.text);
-    speak(ans.text,ans.emotion);
-  }).catch(()=>{
-    const fb=FALLBACK[Math.floor(Math.random()*FALLBACK.length)];
-    addMsg(fb+' (offline mode)','ai'); speak(fb,'thinking');
-  });
+  askLLM(text).then(ans=>{ addMsg(ans.text,'ai'); pushHistory(text,ans.text); speak(ans.text,ans.emotion); })
+  .catch(()=>{ const fb=FALLBACK[Math.floor(Math.random()*FALLBACK.length)];
+    addMsg(fb+' (offline mode)','ai'); speak(fb,'thinking'); });
 }
 
+/* mic */
 const micBtn=$('micBtn');
 let rec=null,listening=false;
 function toggleMic(){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   if(!SR){ addMsg('Mic support nahi hai! Type karo na! 🥺','ai'); return; }
-  // INTERRUPT: agar Mimi bol rahi hai to roko aur suno
   if(speaking){ try{ speechSynthesis.cancel(); }catch(e){}
-    speaking=false; Face.viseme=null; Face.mouthOpen=0; clearTimeout(visemeTimer); hideState(); }
+    speaking=false; Face.viseme=null; clearTimeout(visemeTimer); hideState(); }
   if(listening){ rec.stop(); return; }
   rec=new SR(); rec.lang='hi-IN'; rec.interimResults=false; rec.maxAlternatives=1;
   rec.onstart=()=>{ listening=true; micBtn.classList.add('listening');
-    Anim.set('listening'); setStatus('sun rahi hun... 👂'); showState('listening'); };
+    Anim.set('listening'); setStatus('Listening'); showState('listening'); };
   rec.onresult=e=>{ const txt=e.results[0][0].transcript; stopListen(); hideState();
-    if(autoSendVoice){ replyTo(txt); }
-    else { $('txtIn').value=txt; $('txtIn').focus(); addMsg('(voice) '+txt,'user');
-      Anim.set('idle'); setStatus('Online');
-      addMsg('Edit karke bhejo na! ➤','ai'); }
-  };
-  rec.onerror=()=>{ stopListen(); hideState(); addMsg('Sun nahi payi! 🥺 Phir bolo!','ai'); Anim.set('idle'); setStatus('Online'); };
-  rec.onend=()=>{ if(listening)stopListen(); };
+    if(autoSendVoice) replyTo(txt);
+    else { $('txtIn').value=txt; addMsg('🎙️ "'+txt+'" — edit karke ➤ dabao!','ai');
+      Anim.set('idle'); setStatus('Online'); } };
+  rec.onerror=()=>{ stopListen(); hideState(); showError('Sun nahi payi'); Anim.set('idle'); };
+  rec.onend=()=>{ if(listening) stopListen(); };
   try{ speechSynthesis.cancel(); rec.start(); }catch(e){}
 }
 function stopListen(){ listening=false; micBtn.classList.remove('listening'); }
 micBtn.onclick=toggleMic;
-/* tabs */
-const tabV=$('tabVoice'),tabC=$('tabChat'),tabS=$('tabSettings'),setP=$('settings'),msgsEl=$('msgs');
-tabV.onclick=()=>{ toggleMic(); };
-tabC.onclick=()=>{
-  const on=tabC.classList.toggle('on');
-  msgsEl.style.display=on?'flex':'none'; $('hint').style.display=on?'block':'none';
-};
-tabS.onclick=()=>{
-  const on=setP.classList.toggle('show');
-  tabS.classList.toggle('on',on);
-};
+$('stopBtn').onclick=()=>{ try{ speechSynthesis.cancel(); }catch(e){}
+  setTimeout(()=>{ if(speaking){ speaking=false; Face.viseme=null; hideState();
+    $('stopBtn').classList.remove('show'); Anim.set('idle'); setStatus('Online'); Face.draw(); } },400); };
+$('sendBtn').onclick=()=>{ const v=$('txtIn').value.trim(); if(v){ $('txtIn').value=''; replyTo(v); } };
+$('txtIn').addEventListener('keydown',e=>{ if(e.key==='Enter') $('sendBtn').click(); });
+
+/* tabs + settings */
+const tabC=$('tabChat'),tabS=$('tabSettings'),setP=$('settings'),msgsEl=$('msgs'),chatWrap=$('chatWrap');
+$('tabVoice').onclick=()=>{ toggleMic(); };
+tabC.onclick=()=>{ const on=tabC.classList.toggle('on');
+  chatWrap.style.display=on?'flex':'none'; };
+tabS.onclick=()=>{ const on=setP.classList.toggle('show'); tabS.classList.toggle('on',on); };
 $('tglVoice').onclick=e=>{ voiceOn=e.target.classList.toggle('on'); };
 $('tglAutoSend').onclick=e=>{ autoSendVoice=e.target.classList.toggle('on'); };
 $('volRange').oninput=e=>{ volume=e.target.value/100; };
 $('clearChat').onclick=()=>{ msgsEl.innerHTML=''; };
-/* Gemini key */
-const keyIn=$('keyIn'), keyStatus=$('keyStatus');
-function refreshKeyStatus(){
-  keyStatus.textContent=getGeminiKey()?'✅ Key saved hai — smart mode ON!':'⚪ Key nahi hai — basic mode';
-  keyStatus.style.color=getGeminiKey()?'#4ade80':'rgba(255,255,255,.6)';
-}
-keyIn.value=getGeminiKey(); refreshKeyStatus();
-$('saveKey').onclick=()=>{
-  const v=keyIn.value.trim();
-  if(v){ localStorage.setItem('mimi_gemini_key',v); addMsg('✅ AI key save ho gayi! Ab Mimi smart ho gayi! 🧠✨','ai'); }
-  else { localStorage.removeItem('mimi_gemini_key'); addMsg('🗑️ Key hatayi gayi — basic mode.','ai'); }
-  refreshKeyStatus();
-};
-/* stop speaking */
-$('stopBtn').onclick=()=>{
-  try{ speechSynthesis.cancel(); }catch(e){}
-  // done() fires via onend/onerror(interrupted); fallback:
-  setTimeout(()=>{ if(speaking){ speaking=false; Face.viseme=null; Face.mouthOpen=0;
-    hideState(); $('stopBtn').classList.remove('show'); Anim.set('idle'); setStatus('Online'); Face.draw(); } },400);
-};
-$('sendBtn').onclick=()=>{ const v=$('txtIn').value.trim(); if(v){$('txtIn').value='';replyTo(v);} };
-$('txtIn').addEventListener('keydown',e=>{ if(e.key==='Enter')$('sendBtn').click(); });
+{ const ki=$('keyIn'),ks=$('keyStatus');
+  const ref=()=>{ const k=getGeminiKey();
+    ks.textContent=k?'✅ Backup key saved':'⚪ Backup key nahi hai (built-in AI chal raha)';
+    ks.style.color=k?'#4ade80':'rgba(255,255,255,.6)'; };
+  ki.value=getGeminiKey(); ref();
+  $('saveKey').onclick=()=>{ const v=ki.value.trim();
+    if(v) localStorage.setItem('mimi_gemini_key',v); else localStorage.removeItem('mimi_gemini_key');
+    ref(); }; }
 
 /* tap head = boop */
 const ray=new THREE.Raycaster(),ptr=new THREE.Vector2();
 renderer.domElement.addEventListener('pointerdown',e=>{
-  ptr.x=(e.clientX/innerWidth)*2-1; ptr.y=-(e.clientY/innerHeight)*2+1;
+  const r=renderer.domElement.getBoundingClientRect();
+  ptr.x=((e.clientX-r.left)/r.width)*2-1; ptr.y=-((e.clientY-r.top)/r.height)*2+1;
   ray.setFromCamera(ptr,camera);
   if(ray.intersectObject(headG,true).length&&!speaking){
-    addMsg('Hehe! Boop! 🥰','ai'); speak('Hehe! Boop!','wink'); Anim.set('wink');
+    addMsg('Hehe! Boop! 🥰','ai'); speak('Hehe! Boop!','wink');
   }
 });
 
-addEventListener('resize',()=>{
-  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth,innerHeight);
-  composer.setSize(innerWidth,innerHeight);
-});
+/* ================= LOOP ================= */
+addEventListener('resize',fitStage);
 const clock=new THREE.Clock();
 (function loop(){
   requestAnimationFrame(loop);
@@ -790,9 +729,11 @@ const clock=new THREE.Clock();
   Anim.update(dt,t);
   composer.render();
 })();
+fitStage();
 
+/* greeting */
 setTimeout(()=>{
-  Anim.set('love'); // sem-to-sem like the avatar: heart eyes
+  Anim.set('love');
   const g="Namaste! Main Mimi hun! Tumhari cute robot dost! Mic dabao aur mujhse kuch bhi pucho!";
   addMsg(g,'ai'); speak(g,'love');
 },1200);
