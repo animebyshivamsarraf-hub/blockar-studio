@@ -277,8 +277,11 @@ const CHAR_URLS = [
 ];
 function tryLoadChar(i){
   if(i >= CHAR_URLS.length){ buildFallbackPlayer(); return; }
+  let done=false;
+  const timer=setTimeout(()=>{ if(!done){ done=true; tryLoadChar(i+1); } }, 12000);
   new GLTFLoader().load(CHAR_URLS[i],
     (gltf)=>{
+      if(done) return; done=true; clearTimeout(timer);
       const model = gltf.scene;
       // scan: y in [-1.0, 0.96] (head+torso), face toward -z. Scale so bust ~= 0.95m.
       const s = 0.485;
@@ -290,7 +293,7 @@ function tryLoadChar(i){
       charLoaded = true;
     },
     undefined,
-    ()=>tryLoadChar(i+1)                        // next URL or fallback
+    ()=>{ if(done) return; done=true; clearTimeout(timer); tryLoadChar(i+1); }
   );
 }
 tryLoadChar(0);

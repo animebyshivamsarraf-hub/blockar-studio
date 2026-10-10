@@ -6,9 +6,10 @@ import { dirname } from 'node:path';
 
 const DEST = 'public/models/character.glb';
 // Full-quality original model (user-supplied, face preserved sem-to-sem)
+// NOTE: small version first for fast mobile loading
 const URLS = [
-  'https://muse.ai/files/1309069215631594/1083257314469081/jw4dumau7rdl3f3v0o7dpzyp/character.glb',
   'https://muse.ai/files/1309069215631594/1462915465938091/oprmaaxn1xwwbed5ts7jv6vz/character_small.glb',
+  'https://muse.ai/files/1309069215631594/1083257314469081/jw4dumau7rdl3f3v0o7dpzyp/character.glb',
 ];
 
 if (existsSync(DEST)) {
