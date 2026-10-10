@@ -314,10 +314,18 @@ const Face={
         c.shadowBlur=0; c.fillStyle='#eafcff';
         c.beginPath(); c.arc(ex1+1,ey-15,7,0,Math.PI*2); c.fill();
         c.beginPath(); c.arc(ex2+11,ey-1,6,0,Math.PI*2); c.fill(); });
-    } else if(E==='wink'){
-      openEye(ex1,5,-8,7);
-      GE(()=>{ c.lineWidth=9;
-        c.beginPath(); c.arc(ex2,ey+8,20,Math.PI*1.12,Math.PI*1.88); c.stroke(); });
+    } else if(E==='wink'){ // left: luminous ring eye, right: wink curve
+      c.save();
+      c.shadowColor=blue; c.shadowBlur=14; c.strokeStyle=blue; c.lineWidth=11;
+      c.beginPath(); c.arc(ex1,ey,21,0,Math.PI*2); c.stroke(); // outer contour
+      c.shadowBlur=0; c.fillStyle='#0a2038';
+      c.beginPath(); c.arc(ex1,ey,13,0,Math.PI*2); c.fill(); // dark inner
+      c.shadowColor='#eafcff'; c.shadowBlur=9; c.fillStyle='#eafcff';
+      c.beginPath(); c.arc(ex1+6,ey-7,6,0,Math.PI*2); c.fill(); // highlight
+      c.beginPath(); c.arc(ex1+12,ey+5,2.6,0,Math.PI*2); c.fill();
+      c.restore();
+      GE(()=>{ c.lineWidth=10;
+        c.beginPath(); c.arc(ex2,ey+8,21,Math.PI*1.12,Math.PI*1.88); c.stroke(); });
       /* yellow sparkle stars */
       c.save(); c.shadowColor='#ffd54a'; c.shadowBlur=11; c.fillStyle='#ffd54a';
       const star=(x,y,r)=>{ c.beginPath();
@@ -378,8 +386,10 @@ const M={
 };
 /* ---- head (head-only, no body) ---- */
 const headG=new THREE.Group(); headG.position.y=0; robot.add(headG);
-headG.add(new THREE.Mesh(new RoundedBoxGeometry(1.5,1.28,1.28,4,.34),M.white));
-const scr=new THREE.Mesh(new RoundedBoxGeometry(1.28,1.06,.34,4,.2),M.screen);
+/* generously rounded casing — large corner radius per reference */
+headG.add(new THREE.Mesh(new RoundedBoxGeometry(1.5,1.28,1.28,5,.45),M.white));
+/* black display follows outer curvature — large corner radius */
+const scr=new THREE.Mesh(new RoundedBoxGeometry(1.26,1.04,.34,5,.3),M.screen);
 scr.position.z=.52; headG.add(scr);
 const faceMesh=new THREE.Mesh(new THREE.PlaneGeometry(1.18,1.0),
   new THREE.MeshBasicMaterial({map:faceTex,transparent:true}));
@@ -393,9 +403,9 @@ for(const s of [-1,1]){
   const cap=new THREE.Mesh(new THREE.CircleGeometry(.085,20),M.dark);
   cap.rotation.y=s*Math.PI/2; cap.position.set(s*.9,0,.001); headG.add(cap);
 }
-/* antenna nub */
-{ const n=new THREE.Mesh(new THREE.CylinderGeometry(.05,.07,.12,12),M.white);
-  n.position.y=.68; headG.add(n); }
+/* top detail: small smooth rounded bump, attached to casing */
+{ const n=new THREE.Mesh(new THREE.SphereGeometry(.1,18,14),M.white);
+  n.scale.set(1,.72,1); n.position.y=.65; headG.add(n); }
 robot.traverse(o=>{ if(o.isMesh){ o.castShadow=true; } });
 
 /* floating symbols */
