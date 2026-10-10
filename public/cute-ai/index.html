@@ -115,6 +115,17 @@
     <div class="row"><span>🔊 Voice jawab</span><button class="tgl on" id="tglVoice"></button></div>
     <div class="row"><span>🔈 Volume</span><input type="range" id="volRange" min="0" max="100" value="100"/></div>
     <div class="row"><span>🎙️ Voice auto-send</span><button class="tgl on" id="tglAutoSend"></button></div>
+    <div class="row" style="flex-direction:column;align-items:stretch;gap:8px;">
+      <span>🤖 <b>Free AI Key</b> (smart jawab ke liye)</span>
+      <input id="keyIn" type="password" placeholder="Gemini API key paste karo..."
+        style="padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);color:#fff;font-size:13px;outline:none;"/>
+      <div style="display:flex;gap:8px;">
+        <a href="https://aistudio.google.com/apikey" target="_blank"
+          style="flex:1;text-align:center;padding:9px;border-radius:12px;background:linear-gradient(135deg,#38bdf8,#6366f1);color:#fff;font-size:13px;font-weight:700;text-decoration:none;">🔑 Get FREE Key</a>
+        <button id="saveKey" style="flex:1;padding:9px;border-radius:12px;border:none;background:linear-gradient(135deg,#a855f7,#7c3aed);color:#fff;font-size:13px;font-weight:700;cursor:pointer;">💾 Save</button>
+      </div>
+      <span id="keyStatus" style="font-size:12px;opacity:.7;"></span>
+    </div>
     <div class="row"><span>💬 Chat saaf karo</span><button id="clearChat">Clear</button></div>
   </div>
   <div id="tabs">
@@ -596,15 +607,66 @@ function speak(text,emotion){
 }
 if('speechSynthesis' in window)speechSynthesis.getVoices();
 
+/* ================= FREE LLM: Gemini (free key from Google AI Studio) ================= */
+const chatHistory=[];
+function pushHistory(q,a){
+  chatHistory.push({role:'user',content:q},{role:'assistant',content:a});
+  while(chatHistory.length>8) chatHistory.splice(0,2);
+}
+function getGeminiKey(){ return (localStorage.getItem('mimi_gemini_key')||'').trim(); }
+async function askLLM(text){
+  const key=getGeminiKey();
+  if(!key){ const e=new Error('nokey'); e.code='nokey'; throw e; }
+  const system='You are Mimi, a cute 3D robot AI friend. Reply in the SAME language as the user (Roman Hindi/Hinglish or English). Be sweet, playful and warm like a close friend. Keep it SHORT - 1 to 2 sentences only, under 40 words. End your reply with exactly one emotion tag: [happy] [sad] [excited] [love] [surprised] [angry] [sleepy] [thinking]';
+  const contents=[...chatHistory.slice(-6).map(m=>({role:m.role==='user'?'user':'model',parts:[{text:m.content}]})),{role:'user',parts:[{text:text}]}];
+  const url='https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+encodeURIComponent(key);
+  const ctrl=new AbortController();
+  const to=setTimeout(()=>ctrl.abort(),25000);
+  try{
+    const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({system_instruction:{parts:[{text:system}]},contents:contents,
+        generationConfig:{maxOutputTokens:160,temperature:.9}}),signal:ctrl.signal});
+    if(!res.ok){ const e=new Error('llm '+res.status); e.code='badkey'; throw e; }
+    const j=await res.json();
+    let out=(j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts&&j.candidates[0].content.parts[0]&&j.candidates[0].content.parts[0].text)||'';
+    let emotion='happy';
+    const m=out.match(/\[(happy|sad|excited|love|surprised|angry|sleepy|thinking|wink|laugh|music)\]\s*$/i);
+    if(m){ emotion=m[1].toLowerCase(); out=out.slice(0,m.index).trim(); }
+    out=out.trim().replace(/^Mimi:\s*/i,'').slice(0,320);
+    if(!out) throw new Error('empty');
+    return {text:out,emotion};
+  } finally { clearTimeout(to); }
+}
+
 function replyTo(text){
   addMsg(text,'user');
   Anim.set('thinking'); setStatus('soch rahi hun... 🤔'); showState('thinking');
-  setTimeout(()=>{
-    const ans=think(text);
-    addMsg(ans.text,'ai');
-    if(ans.act==='greeting'){ Anim.set('greeting'); setTimeout(()=>Anim.set('idle'),1800); }
-    speak(ans.text,ans.e);
-  },700+Math.random()*500);
+  // 1) instant personality replies (no network)
+  const quick=think(text);
+  if(!FALLBACK.includes(quick.text)){
+    setTimeout(()=>{
+      addMsg(quick.text,'ai'); pushHistory(text,quick.text);
+      if(quick.act==='greeting'){ Anim.set('greeting'); setTimeout(()=>Anim.set('idle'),1800); }
+      speak(quick.text,quick.e);
+    },700+Math.random()*500);
+    return;
+  }
+  // 2) free LLM (Gemini) for everything else
+  askLLM(text).then(ans=>{
+    addMsg(ans.text,'ai'); pushHistory(text,ans.text);
+    speak(ans.text,ans.emotion);
+  }).catch((err)=>{
+    if(err&&err.code==='nokey'){
+      addMsg('🤖 Smart jawab ke liye free AI key chahiye! ⚙️ Settings kholo → "Get free key" dabao → key copy karke yahin paste karo. Bilkul free hai!','ai');
+      speak('Smart jawab ke liye settings me free AI key dalo na!','thinking');
+    } else if(err&&err.code==='badkey'){
+      addMsg('⚠️ Key kaam nahi kar rahi! Settings me sahi key dalo.','ai');
+      showError('Key galat hai');
+    } else {
+      const fb=FALLBACK[Math.floor(Math.random()*FALLBACK.length)];
+      addMsg(fb+' (offline mode)','ai'); speak(fb,'thinking');
+    }
+  });
 }
 
 const micBtn=$('micBtn');
@@ -646,6 +708,19 @@ $('tglVoice').onclick=e=>{ voiceOn=e.target.classList.toggle('on'); };
 $('tglAutoSend').onclick=e=>{ autoSendVoice=e.target.classList.toggle('on'); };
 $('volRange').oninput=e=>{ volume=e.target.value/100; };
 $('clearChat').onclick=()=>{ msgsEl.innerHTML=''; };
+/* Gemini key */
+const keyIn=$('keyIn'), keyStatus=$('keyStatus');
+function refreshKeyStatus(){
+  keyStatus.textContent=getGeminiKey()?'✅ Key saved hai — smart mode ON!':'⚪ Key nahi hai — basic mode';
+  keyStatus.style.color=getGeminiKey()?'#4ade80':'rgba(255,255,255,.6)';
+}
+keyIn.value=getGeminiKey(); refreshKeyStatus();
+$('saveKey').onclick=()=>{
+  const v=keyIn.value.trim();
+  if(v){ localStorage.setItem('mimi_gemini_key',v); addMsg('✅ AI key save ho gayi! Ab Mimi smart ho gayi! 🧠✨','ai'); }
+  else { localStorage.removeItem('mimi_gemini_key'); addMsg('🗑️ Key hatayi gayi — basic mode.','ai'); }
+  refreshKeyStatus();
+};
 /* stop speaking */
 $('stopBtn').onclick=()=>{
   try{ speechSynthesis.cancel(); }catch(e){}
