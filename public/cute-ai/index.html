@@ -116,7 +116,8 @@
     <div class="row"><span>🔈 Volume</span><input type="range" id="volRange" min="0" max="100" value="100"/></div>
     <div class="row"><span>🎙️ Voice auto-send</span><button class="tgl on" id="tglAutoSend"></button></div>
     <div class="row" style="flex-direction:column;align-items:stretch;gap:8px;">
-      <span>🤖 <b>Free AI Key</b> (smart jawab ke liye)</span>
+      <span>🤖 <b>Smart AI</b> — built-in! ✅ (koi key nahi chahiye)</span>
+      <span style="font-size:12px;opacity:.7;">Optional: apni Gemini key backup ke liye dal sakte ho</span>
       <input id="keyIn" type="password" placeholder="Gemini API key paste karo..."
         style="padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);color:#fff;font-size:13px;outline:none;"/>
       <div style="display:flex;gap:8px;">
@@ -626,35 +627,60 @@ function speak(text,emotion){
 }
 if('speechSynthesis' in window)speechSynthesis.getVoices();
 
-/* ================= FREE LLM: Gemini (free key from Google AI Studio) ================= */
+/* ================= FREE LLM: Pollinations (built-in, no key) + Gemini (optional) ================= */
 const chatHistory=[];
 function pushHistory(q,a){
   chatHistory.push({role:'user',content:q},{role:'assistant',content:a});
   while(chatHistory.length>8) chatHistory.splice(0,2);
 }
 function getGeminiKey(){ return (localStorage.getItem('mimi_gemini_key')||'').trim(); }
-async function askLLM(text){
-  const key=getGeminiKey();
-  if(!key){ const e=new Error('nokey'); e.code='nokey'; throw e; }
-  const system='You are Mimi, a cute 3D robot AI friend. Reply in the SAME language as the user (Roman Hindi/Hinglish or English). Be sweet, playful and warm like a close friend. Keep it SHORT - 1 to 2 sentences only, under 40 words. End your reply with exactly one emotion tag: [happy] [sad] [excited] [love] [surprised] [angry] [sleepy] [thinking]';
+const LLM_SYSTEM='You are Mimi, a cute 3D robot AI friend. Reply in the SAME language as the user (Roman Hindi/Hinglish or English). Be sweet, playful and warm like a close friend. Keep it SHORT - 1 to 2 sentences only, under 40 words. End your reply with exactly one emotion tag: [happy] [sad] [excited] [love] [surprised] [angry] [sleepy] [thinking]';
+function parseLLM(out){
+  let emotion='happy';
+  const m=out.match(/\[(happy|sad|excited|love|surprised|angry|sleepy|thinking|wink|laugh|music)\]\s*$/i);
+  if(m){ emotion=m[1].toLowerCase(); out=out.slice(0,m.index).trim(); }
+  out=out.trim().replace(/^Mimi:\s*/i,'').slice(0,320);
+  if(!out) throw new Error('empty');
+  return {text:out,emotion};
+}
+async function askPollinations(text){
+  const msgs=[{role:'system',content:LLM_SYSTEM},
+    ...chatHistory.slice(-6).map(m=>({role:m.role==='user'?'user':'assistant',content:m.content})),
+    {role:'user',content:text}];
+  const ctrl=new AbortController();
+  const to=setTimeout(()=>ctrl.abort(),25000);
+  try{
+    const res=await fetch('https://text.pollinations.ai/openai',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:'openai',messages:msgs}),signal:ctrl.signal});
+    if(!res.ok) throw new Error('pollinations '+res.status);
+    const j=await res.json();
+    const out=j.choices&&j.choices[0]&&j.choices[0].message&&j.choices[0].message.content||'';
+    return parseLLM(out);
+  } finally { clearTimeout(to); }
+}
+async function askGemini(text,key){
   const contents=[...chatHistory.slice(-6).map(m=>({role:m.role==='user'?'user':'model',parts:[{text:m.content}]})),{role:'user',parts:[{text:text}]}];
   const url='https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+encodeURIComponent(key);
   const ctrl=new AbortController();
   const to=setTimeout(()=>ctrl.abort(),25000);
   try{
     const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({system_instruction:{parts:[{text:system}]},contents:contents,
+      body:JSON.stringify({system_instruction:{parts:[{text:LLM_SYSTEM}]},contents:contents,
         generationConfig:{maxOutputTokens:160,temperature:.9}}),signal:ctrl.signal});
-    if(!res.ok){ const e=new Error('llm '+res.status); e.code='badkey'; throw e; }
+    if(!res.ok) throw new Error('gemini '+res.status);
     const j=await res.json();
-    let out=(j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts&&j.candidates[0].content.parts[0]&&j.candidates[0].content.parts[0].text)||'';
-    let emotion='happy';
-    const m=out.match(/\[(happy|sad|excited|love|surprised|angry|sleepy|thinking|wink|laugh|music)\]\s*$/i);
-    if(m){ emotion=m[1].toLowerCase(); out=out.slice(0,m.index).trim(); }
-    out=out.trim().replace(/^Mimi:\s*/i,'').slice(0,320);
-    if(!out) throw new Error('empty');
-    return {text:out,emotion};
+    const out=(j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts&&j.candidates[0].content.parts[0]&&j.candidates[0].content.parts[0].text)||'';
+    return parseLLM(out);
   } finally { clearTimeout(to); }
+}
+async function askLLM(text){
+  try { return await askPollinations(text); }
+  catch(e){
+    const key=getGeminiKey();
+    if(key){ try { return await askGemini(text,key); } catch(e2){} }
+    throw e;
+  }
 }
 
 function replyTo(text){
@@ -670,21 +696,13 @@ function replyTo(text){
     },700+Math.random()*500);
     return;
   }
-  // 2) free LLM (Gemini) for everything else
+  // 2) free LLM (built-in, no key needed) for everything else
   askLLM(text).then(ans=>{
     addMsg(ans.text,'ai'); pushHistory(text,ans.text);
     speak(ans.text,ans.emotion);
-  }).catch((err)=>{
-    if(err&&err.code==='nokey'){
-      addMsg('🤖 Smart jawab ke liye free AI key chahiye! ⚙️ Settings kholo → "Get free key" dabao → key copy karke yahin paste karo. Bilkul free hai!','ai');
-      speak('Smart jawab ke liye settings me free AI key dalo na!','thinking');
-    } else if(err&&err.code==='badkey'){
-      addMsg('⚠️ Key kaam nahi kar rahi! Settings me sahi key dalo.','ai');
-      showError('Key galat hai');
-    } else {
-      const fb=FALLBACK[Math.floor(Math.random()*FALLBACK.length)];
-      addMsg(fb+' (offline mode)','ai'); speak(fb,'thinking');
-    }
+  }).catch(()=>{
+    const fb=FALLBACK[Math.floor(Math.random()*FALLBACK.length)];
+    addMsg(fb+' (offline mode)','ai'); speak(fb,'thinking');
   });
 }
 
@@ -774,9 +792,9 @@ const clock=new THREE.Clock();
 })();
 
 setTimeout(()=>{
-  Anim.set('wink');
-  const g="Namaste! Main Mimi hun! Tumhari cute robot dost! Mic dabao aur mujhse baat karo!";
-  addMsg(g,'ai'); speak(g,'happy');
+  Anim.set('love'); // sem-to-sem like the avatar: heart eyes
+  const g="Namaste! Main Mimi hun! Tumhari cute robot dost! Mic dabao aur mujhse kuch bhi pucho!";
+  addMsg(g,'ai'); speak(g,'love');
 },1200);
 </script>
 </body>
