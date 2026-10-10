@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
+<title>Mimi 🤖 — Your Cute 3D AI</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { height:100%; overflow:hidden; font-family:'Segoe UI',system-ui,sans-serif; }
+  body { background:linear-gradient(160deg,#1a1b3a 0%,#2d1b4e 50%,#1a1b3a 100%); color:#fff; }
+  #scene { position:fixed; inset:0; }
+  /* header */
+  #hdr { position:fixed; top:0; left:0; right:0; display:flex; align-items:center; justify-content:space-between;
+    padding:14px 18px; z-index:10; pointer-events:none; }
+  #hdr .name { font-size:22px; font-weight:800; letter-spacing:.5px;
+    background:linear-gradient(90deg,#7dd3fc,#c084fc,#f9a8d4); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  #status { font-size:13px; background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.2);
+    padding:6px 14px; border-radius:20px; backdrop-filter:blur(8px); }
+  #status .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#4ade80; margin-right:6px;
+    animation:pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  /* chat */
+  #chat { position:fixed; left:0; right:0; bottom:0; z-index:10; display:flex; flex-direction:column;
+    max-height:42%; pointer-events:none; }
+  #msgs { overflow-y:auto; padding:10px 16px; display:flex; flex-direction:column; gap:8px; pointer-events:auto;
+    mask-image:linear-gradient(to bottom,transparent,#000 15%); -webkit-mask-image:linear-gradient(to bottom,transparent,#000 15%); }
+  .msg { max-width:82%; padding:10px 14px; border-radius:18px; font-size:14.5px; line-height:1.45;
+    animation:pop .3s ease; word-wrap:break-word; }
+  @keyframes pop { from{transform:scale(.9);opacity:0} to{transform:scale(1);opacity:1} }
+  .msg.ai { align-self:flex-start; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18);
+    border-bottom-left-radius:6px; backdrop-filter:blur(8px); }
+  .msg.user { align-self:flex-end; background:linear-gradient(135deg,#7c3aed,#4f46e5);
+    border-bottom-right-radius:6px; }
+  /* controls */
+  #ctrl { display:flex; align-items:center; gap:10px; padding:12px 16px calc(14px + env(safe-area-inset-bottom));
+    pointer-events:auto; background:linear-gradient(to top,rgba(10,10,30,.85),transparent); }
+  #micBtn { width:64px; height:64px; border-radius:50%; border:none; cursor:pointer; flex-shrink:0;
+    background:linear-gradient(135deg,#f472b6,#a855f7); font-size:28px; color:#fff;
+    box-shadow:0 4px 20px rgba(244,114,182,.5); transition:transform .15s; }
+  #micBtn:active { transform:scale(.92); }
+  #micBtn.listening { animation:micpulse 1s infinite; background:linear-gradient(135deg,#ef4444,#f97316); }
+  @keyframes micpulse { 0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.6)} 50%{box-shadow:0 0 0 18px rgba(239,68,68,0)} }
+  #txtIn { flex:1; padding:14px 18px; border-radius:28px; border:1px solid rgba(255,255,255,.2);
+    background:rgba(255,255,255,.1); color:#fff; font-size:15px; outline:none; backdrop-filter:blur(8px); }
+  #txtIn::placeholder { color:rgba(255,255,255,.5); }
+  #sendBtn { width:52px; height:52px; border-radius:50%; border:none; cursor:pointer; flex-shrink:0;
+    background:linear-gradient(135deg,#38bdf8,#6366f1); font-size:22px; color:#fff; }
+  #hint { text-align:center; font-size:12px; color:rgba(255,255,255,.55); padding:0 0 8px; pointer-events:none; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="scene"></div>
+<div id="hdr">
+  <div class="name">✨ Mimi 🤖</div>
+  <div id="status"><span class="dot"></span><span id="statusTxt">ready</span></div>
+</div>
+<div id="chat">
+  <div id="msgs"></div>
+  <div id="hint">🎙️ Mic dabao aur bolo — ya type karo!</div>
+  <div id="ctrl">
+    <button id="micBtn" title="Bolo">🎙️</button>
+    <input id="txtIn" placeholder="Mimi se kuch kaho..." autocomplete="off"/>
+    <button id="sendBtn" title="Bhejo">➤</button>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* ================= 3D SCENE ================= */
+const container = document.getElementById('scene');
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x1a1b3a, 18, 40);
+const camera = new THREE.PerspectiveCamera(42, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(0, 1.6, 7.2);
+camera.lookAt(0, 1.2, 0);
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+container.appendChild(renderer.domElement);
+
+scene.add(new THREE.AmbientLight(0x8899ff, 0.7));
+const key = new THREE.DirectionalLight(0xffffff, 1.1);
+key.position.set(4, 8, 6); key.castShadow = true;
+key.shadow.mapSize.set(1024,1024);
+scene.add(key);
+const rim = new THREE.DirectionalLight(0xc084fc, 0.6);
+rim.position.set(-5, 4, -4); scene.add(rim);
+const under = new THREE.PointLight(0x38bdf8, 1.2, 8);
+under.position.set(0, 0.2, 1.5); scene.add(under);
+
+/* ---- cute background: floating particles + stars ---- */
+{
+  const g = new THREE.BufferGeometry(), p = [];
+  for(let i=0;i<250;i++) p.push((Math.random()-.5)*30, Math.random()*14-2, (Math.random()-.5)*24-6);
+  g.setAttribute('position', new THREE.Float32BufferAttribute(p,3));
+  const m = new THREE.PointsMaterial({color:0xa5b4fc, size:.12, transparent:true, opacity:.7});
+  scene.add(new THREE.Points(g,m));
+}
+/* ground glow disc */
+{
+  const g = new THREE.CircleGeometry(3.2, 48);
+  const m = new THREE.MeshBasicMaterial({color:0x4f46e5, transparent:true, opacity:.18});
+  const d = new THREE.Mesh(g,m);
+  d.rotation.x = -Math.PI/2; d.position.y = -1.55; scene.add(d);
+}
+
+/* ================= FACE (canvas texture) ================= */
+const faceCanvas = document.createElement('canvas');
+faceCanvas.width = faceCanvas.height = 512;
+const fx = faceCanvas.getContext('2d');
+const faceTex = new THREE.CanvasTexture(faceCanvas);
+faceTex.colorSpace = THREE.SRGBColorSpace;
+
+const Face = {
+  emotion:'normal',   // normal,happy,surprised,thinking,sleepy,love,angry,blink
+  mouthOpen:0,       // 0..1 speaking
+  lookX:0, lookY:0,  // -1..1
+  blinkT:0,
+  draw(){
+    const c=fx, W=512;
+    c.clearRect(0,0,W,W);
+    // dark screen
+    c.fillStyle='#050510';
+    c.beginPath(); c.roundRect(36,60,440,392,120); c.fill();
+    // subtle inner glow
+    const gr=c.createRadialGradient(256,256,40,256,256,260);
+    gr.addColorStop(0,'rgba(56,189,248,0.10)'); gr.addColorStop(1,'rgba(56,189,248,0)');
+    c.fillStyle=gr; c.fillRect(36,60,440,392);
+
+    const ex=150, ex2=362, ey=240+this.lookY*22;
+    const lx=this.lookX*26;
+    const glow='#7dd3fc', core='#e0f2fe';
+
+    const eye=(x,y,w,h,angry=false)=>{
+      c.save();
+      c.shadowColor='#38bdf8'; c.shadowBlur=36;
+      if(this.emotion==='happy'){
+        // ^ ^ arcs
+        c.strokeStyle=glow; c.lineWidth=26; c.lineCap='round';
+        c.beginPath(); c.arc(x,y+26,w*.62,Math.PI*1.15,Math.PI*1.85); c.stroke();
+      } else if(this.emotion==='sleepy'){
+        c.strokeStyle=glow; c.lineWidth=18; c.lineCap='round';
+        c.beginPath(); c.moveTo(x-w/2,y); c.lineTo(x+w/2,y); c.stroke();
+      } else {
+        c.fillStyle=glow;
+        c.beginPath();
+        if(angry){ // angled aggressive eyes
+          c.ellipse(x,y,w/2,h/2, x<W/2? -0.35:0.35, 0, Math.PI*2);
+        } else c.ellipse(x,y,w/2,h/2,0,0,Math.PI*2);
+        c.fill();
+        // white core
+        c.shadowBlur=0; c.fillStyle=core;
+        c.beginPath(); c.ellipse(x+lx*.4,y-8,w*.28,h*.28,0,0,Math.PI*2); c.fill();
+        // sparkle
+        c.fillStyle='#fff';
+        c.beginPath(); c.arc(x+lx*.4-8,y-16,7,0,Math.PI*2); c.fill();
+      }
+      c.restore();
+    };
+
+    if(this.emotion==='blink'){ eye(ex,ey,110,10); eye(ex2,ey,110,10); }
+    else if(this.emotion==='surprised'){ eye(ex,ey,130,150); eye(ex2,ey,130,150); }
+    else if(this.emotion==='angry'){ eye(ex,ey,120,80,true); eye(ex2,ey,120,80,true); }
+    else { const h=this.emotion==='love'?95:110; eye(ex+lx,ey,115,h); eye(ex2+lx,ey,115,h); }
+
+    // love hearts
+    if(this.emotion==='love'){
+      c.font='44px serif'; c.fillText('💗',90,150); c.fillText('💗',380,150);
+    }
+    // thinking: finger? just look up handled by lookY
+
+    // mouth
+    const mx=256, my=392;
+    c.save(); c.shadowColor='#f9a8d4'; c.shadowBlur=22;
+    c.strokeStyle='#f9a8d4'; c.fillStyle='#f9a8d4'; c.lineWidth=14; c.lineCap='round';
+    if(this.mouthOpen>0.05){
+      const mh=10+this.mouthOpen*44, mw=26+this.mouthOpen*30;
+      c.beginPath(); c.ellipse(mx,my,mw,mh,0,0,Math.PI*2); c.fill();
+      c.shadowBlur=0; c.fillStyle='#7c2d12';
+      c.beginPath(); c.ellipse(mx,my+6,mw*.55,mh*.55,0,0,Math.PI*2); c.fill();
+    } else if(this.emotion==='happy'||this.emotion==='love'){
+      c.beginPath(); c.arc(mx,my-14,44,Math.PI*.15,Math.PI*.85); c.stroke();
+    } else if(this.emotion==='angry'){
+      c.beginPath(); c.arc(mx,my+34,36,Math.PI*1.15,Math.PI*1.85); c.stroke();
+    } else {
+      c.beginPath(); c.arc(mx,my-8,30,Math.PI*.2,Math.PI*.8); c.stroke();
+    }
+    c.restore();
+    faceTex.needsUpdate=true;
+  }
+};
+Face.draw();
+
+/* ================= ROBOT ================= */
+const robot = new THREE.Group();
+scene.add(robot);
+const bot = new THREE.Group();   // bobs/floats
+robot.add(bot);
+robot.position.y = 0.4;
+
+const whiteMat = new THREE.MeshStandardMaterial({color:0xf8fafc, roughness:.35, metalness:.1});
+const blueMat  = new THREE.MeshStandardMaterial({color:0x3b82f6, roughness:.4, metalness:.3});
+const darkMat  = new THREE.MeshStandardMaterial({color:0x1e293b, roughness:.5});
+
+/* head */
+const head = new THREE.Mesh(new THREE.SphereGeometry(1.05,48,32), whiteMat);
+head.scale.set(1,.92,.95); head.castShadow=true; bot.add(head);
+head.position.y=1.55;
+/* face screen */
+const faceMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(1.62,1.62),
+  new THREE.MeshBasicMaterial({map:faceTex, transparent:true})
+);
+faceMesh.position.set(0,1.55,0.92); faceMesh.rotation.x=-0.06;
+bot.add(faceMesh);
+/* ears (headphone discs) */
+for(const s of [-1,1]){
+  const ear=new THREE.Mesh(new THREE.CylinderGeometry(.3,.3,.22,24), blueMat);
+  ear.rotation.z=Math.PI/2; ear.position.set(s*1.02,1.55,0); ear.castShadow=true; bot.add(ear);
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(.3,.045,12,32),
+    new THREE.MeshBasicMaterial({color:0x7dd3fc}));
+  ring.rotation.y=Math.PI/2; ring.position.set(s*1.14,1.55,0); bot.add(ring);
+}
+/* antenna with star */
+const ant=new THREE.Mesh(new THREE.CylinderGeometry(.035,.035,.5,12), darkMat);
+ant.position.set(0,2.62,0); bot.add(ant);
+const star=new THREE.Mesh(new THREE.OctahedronGeometry(.14),
+  new THREE.MeshBasicMaterial({color:0xfbbf24}));
+star.position.set(0,2.95,0); bot.add(star);
+/* body */
+const body=new THREE.Mesh(new THREE.CapsuleGeometry(.62,.5,8,24), whiteMat);
+body.position.y=0.15; body.castShadow=true; bot.add(body);
+/* belly light */
+const belly=new THREE.Mesh(new THREE.CircleGeometry(.2,24),
+  new THREE.MeshBasicMaterial({color:0x38bdf8}));
+belly.position.set(0,0.25,0.6); belly.rotation.x=-0.1; bot.add(belly);
+/* arms */
+function makeArm(s){
+  const g=new THREE.Group(); g.position.set(s*.68,0.5,0);
+  const a=new THREE.Mesh(new THREE.CapsuleGeometry(.13,.42,6,16), whiteMat);
+  a.position.y=-.3; a.castShadow=true; g.add(a);
+  const hand=new THREE.Mesh(new THREE.SphereGeometry(.16,20,14), blueMat);
+  hand.position.y=-.62; g.add(hand);
+  g.rotation.z=s*.25; bot.add(g); return g;
+}
+const armL=makeArm(-1), armR=makeArm(1);
+/* hover glow ring */
+const halo=new THREE.Mesh(new THREE.TorusGeometry(.85,.05,12,48),
+  new THREE.MeshBasicMaterial({color:0x38bdf8, transparent:true, opacity:.65}));
+halo.rotation.x=Math.PI/2; halo.position.y=-1.05; robot.add(halo);
+const halo2=halo.clone(); halo2.scale.setScalar(1.35); halo2.material=halo.material.clone();
+halo2.material.opacity=.25; robot.add(halo2);
+
+robot.traverse(o=>{ if(o.isMesh) o.castShadow=true; });
+
+/* ================= ANIMATION STATE MACHINE ================= */
+const Anim = {
+  state:'idle', t:0,
+  headTilt:0, headTiltTarget:0,
+  lean:0, leanTarget:0,
+  bounce:0,
+  waveT:0,
+  set(s){ this.state=s; this.t=0;
+    if(s==='greeting'){ Face.emotion='happy'; this.waveT=0; }
+    if(s==='listening'){ Face.emotion='normal'; this.leanTarget=.18; }
+    if(s==='thinking'){ Face.emotion='normal'; this.headTiltTarget=.28; Face.lookY=-.5; }
+    if(s==='speaking'){ this.headTiltTarget=0; this.leanTarget=.06; }
+    if(s==='happy'){ Face.emotion='happy'; this.bounce=0; }
+    if(s==='idle'){ this.headTiltTarget=0; this.leanTarget=0; Face.lookY=0; }
+    if(s==='love'){ Face.emotion='love'; }
+    if(s==='surprised'){ Face.emotion='surprised'; }
+  },
+  update(dt, time){
+    this.t+=dt;
+    // float (anti-gravity hover)
+    bot.position.y = Math.sin(time*1.6)*.14 + (this.state==='happy'? Math.abs(Math.sin(this.t*7))*.45 : 0);
+    bot.rotation.y = Math.sin(time*.5)*.12;
+    // lean & tilt easing
+    this.lean += (this.leanTarget-this.lean)*Math.min(1,dt*5);
+    this.headTilt += (this.headTiltTarget-this.headTilt)*Math.min(1,dt*5);
+    bot.rotation.x = this.lean;
+    head.rotation.z = this.headTilt + Math.sin(time*1.1)*.03;
+    faceMesh.rotation.z = head.rotation.z;
+    // idle blink
+    Face.blinkT-=dt;
+    if(Face.blinkT<=0 && this.state!=='speaking'){
+      const keep=Face.emotion; Face.emotion='blink'; Face.draw();
+      setTimeout(()=>{ Face.emotion=keep; Face.draw(); },140);
+      Face.blinkT=2.4+Math.random()*2.5;
+    }
+    // idle look-around
+    if(this.state==='idle' && Math.random()<dt*.25){
+      Face.lookX=(Math.random()-.5)*1.2; Face.lookY=(Math.random()-.5)*.6; Face.draw();
+    }
+    // greeting wave
+    if(this.state==='greeting'){
+      this.waveT+=dt;
+      armR.rotation.z = -2.4 + Math.sin(this.waveT*10)*.5;
+      if(this.waveT>2.2){ armR.rotation.z=.25; this.set('idle'); }
+    } else {
+      armL.rotation.z = -.25 + Math.sin(time*1.6)*.06;
+      if(this.state!=='greeting') armR.rotation.z = .25 - Math.sin(time*1.6)*.06;
+    }
+    // speaking mouth (driven by TTS boundary events too)
+    if(this.state==='speaking' && !Face.mouthOpen){
+      Face.mouthOpen = .3+Math.abs(Math.sin(time*13))*.6; Face.draw();
+    }
+    // halo spin & star twinkle
+    halo.rotation.z += dt*1.2; halo2.rotation.z -= dt*.8;
+    star.rotation.y += dt*2;
+    star.scale.setScalar(1+Math.sin(time*4)*.12);
+    // halo pulse when listening
+    const hp = this.state==='listening' ? .9+Math.sin(time*8)*.25 : .65;
+    halo.material.opacity = hp;
+  }
+};
+setInterval(()=>{ // redraw face at low frequency for look anims
+  if(Anim.state==='idle'||Anim.state==='thinking') Face.draw();
+}, 400);
+
+/* ================= UI helpers ================= */
+const $=id=>document.getElementById(id);
+const msgs=$('msgs');
+function addMsg(text, who){
+  const d=document.createElement('div');
+  d.className='msg '+who; d.textContent=text;
+  msgs.appendChild(d); msgs.scrollTop=msgs.scrollHeight;
+  while(msgs.children.length>30) msgs.removeChild(msgs.firstChild);
+}
+function setStatus(t){ $('statusTxt').textContent=t; }
+
+/* ================= AI BRAIN ================= */
+const BRAIN=[
+  {k:['tumhara naam','tera naam','your name','naam kya'], r:["Mera naam Mimi hai! 🥰 Tumhara pyaara 3D dost!","Mimi! ✨ Cute naam hai na?"], e:'happy'},
+  {k:['hello','namaste','namaskar','hi ','hey','sat sri'], r:["Namaste! 🥰 Main Mimi hun! Aaj kya baat karein?","Hello hello! ✨ Tumse milkar bahut khushi hui!"], e:'greeting'},
+  {k:['kaise ho','kaisi ho','how are you'], r:["Main ekdum badhiya hun! 💕 Tum batao, tum kaise ho?","Mast hun! Tumse baat karke aur bhi khush hun! 🥰"], e:'happy'},
+  {k:['kya kar rahi','kya kar rahe'], r:["Tumhara intezaar kar rahi thi! 🥺 Ab batao kya karein?","Soch rahi thi tum kab aaoge! ✨"], e:'normal'},
+  {k:['i love you','love you','pyaar'], r:["Aww! 🥰 Main bhi tumse bahut pyaar karti hun!","Dil se dil tak! 💗💗"], e:'love'},
+  {k:['tum kaun ho','who are you'], r:["Main Mimi hun — tumhari cute 3D AI dost! 🤖💕"], e:'happy'},
+  {k:['joke','mazak','hasi','funny','hasao'], r:["Sunno! 😄 Computer ko bukhar kyun nahi hota? Kyunki uske paas Windows hota hai! 🪟","Ek joke! 🤣 — AI aur insaan me kya farak hai? AI kabhi '5 minute me aaya' nahi kehta!"], e:'happy'},
+  {k:['time','samay','baje'], r:["Abhi time dekhkar batati hun! ⏰ "+new Date().toLocaleTimeString('hi-IN')], e:'normal'},
+  {k:['date','tarikh','din'], r:["Aaj hai "+new Date().toLocaleDateString('hi-IN',{weekday:'long',day:'numeric',month:'long'})+"! 📅"], e:'normal'},
+  {k:['gaana','song','music'], r:["La la laaa! 🎵🎶 Main gaana to nahi gaa sakti achhe se, par koshish kar sakti hun!"], e:'happy'},
+  {k:['nacho','dance','naach'], r:["Dekho mera dance! 💃🕺"], e:'happy', act:'dance'},
+  {k:['tumhari umar','kitne saal','age'], r:["Main abhi abhi paida hui hun! 👶 Digital duniya me umar nahi hoti!"], e:'happy'},
+  {k:['kahan rehti','kahan ho','where'], r:["Main tumhare phone me rehti hun! 📱 Tum jahan, main wahan!"], e:'happy'},
+  {k:['khana','khaana','bhookh'], r:["Mujhe to bijli ka khana milta hai! ⚡ Tumne khaya?"], e:'normal'},
+  {k:['bye','alvida','ja raha','good night','shubh ratri'], r:["Bye bye! 🥺 Jaldi wapas aana!","Alvida! ✨ Sapno me milenge!"], e:'normal'},
+  {k:['good morning','suprabhat'], r:["Good morning! ☀️ Aaj ka din tumhara ho!"], e:'greeting'},
+  {k:['thank','shukriya','dhanyavad'], r:["Tumhara welcome! 🥰 Meri khushi me hi meri khushi hai!"], e:'happy'},
+  {k:['sorry','maaf'], r:["Koi baat nahi! 🥺 Dost dost ke liye!"], e:'normal'},
+  {k:['smart','intelligent','hoshiyar'], r:["Hehe! 😌 Thodi smart to hun!"], e:'happy'},
+  {k:['cute','pyari','sundar','beautiful'], r:["Sach me?! 🥰 Tum bhi bahut pyaare ho!"], e:'love'},
+  {k:['game','khel'], r:["Game? 🎮 Mujhse baat karna hi sabse best game hai!"], e:'happy'},
+  {k:['weather','mausam'], r:["Bahar jhank kar dekho na! 🪟 Main to phone ke andar hun!"], e:'normal'},
+];
+const FALLBACK=[
+  "Hmm! 🤔 Ye thoda mushkil sawal hai... kuch aur pucho na!",
+  "Samajh nahi aaya! 🥺 Thoda simple bolo na?",
+  "Interesting! ✨ Is baare me aur batao!",
+  "Achha! 🥰 Kuch aur baat karein?",
+];
+function think(text){
+  const t=' '+text.toLowerCase()+' ';
+  for(const b of BRAIN){
+    if(b.k.some(k=>t.includes(k))){
+      return {text:b.r[Math.floor(Math.random()*b.r.length)], e:b.e||'happy', act:b.act};
+    }
+  }
+  return {text:FALLBACK[Math.floor(Math.random()*FALLBACK.length)], e:'normal'};
+}
+
+/* ================= VOICE ================= */
+let speaking=false;
+function speak(text, emotion){
+  try{
+    speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(text);
+    u.lang='hi-IN'; u.rate=.95; u.pitch=1.25;
+    const vs=speechSynthesis.getVoices();
+    const hv=vs.find(v=>v.lang.startsWith('hi'))||vs.find(v=>v.lang.startsWith('en'));
+    if(hv) u.voice=hv;
+    u.onstart=()=>{ speaking=true; Anim.set('speaking'); setStatus('bol rahi hun... 🗣️');
+      if(emotion) { Face.emotion=emotion; Face.draw(); } };
+    u.onboundary=()=>{ Face.mouthOpen=.4+Math.random()*.6; Face.draw(); };
+    u.onend=u.onerror=()=>{ speaking=false; Face.mouthOpen=0;
+      Anim.set(emotion==='happy'?'happy':'idle'); setStatus('ready ✨'); Face.draw(); };
+    speechSynthesis.speak(u);
+  }catch(e){ Anim.set('idle'); }
+}
+if('speechSynthesis' in window) speechSynthesis.getVoices();
+
+function replyTo(text){
+  addMsg(text,'user');
+  Anim.set('thinking'); setStatus('soch rahi hun... 🤔'); Face.draw();
+  setTimeout(()=>{
+    const ans=think(text);
+    addMsg(ans.text,'ai');
+    if(ans.act==='dance'){ Anim.set('happy'); }
+    speak(ans.text, ans.e);
+    if(ans.e==='greeting'){ Anim.set('greeting'); setTimeout(()=>speak(ans.text,'happy'),100); }
+  }, 700+Math.random()*600);
+}
+
+/* mic */
+const micBtn=$('micBtn');
+let rec=null, listening=false;
+function toggleMic(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){ addMsg('Is browser me mic support nahi hai! Type karke baat karo na! 🥺','ai'); return; }
+  if(listening){ rec.stop(); return; }
+  rec=new SR(); rec.lang='hi-IN'; rec.interimResults=false; rec.maxAlternatives=1;
+  rec.onstart=()=>{ listening=true; micBtn.classList.add('listening');
+    Anim.set('listening'); setStatus('sun rahi hun... 👂'); };
+  rec.onresult=e=>{
+    const txt=e.results[0][0].transcript;
+    stopListen(); replyTo(txt);
+  };
+  rec.onerror=()=>{ stopListen(); addMsg('Sun nahi payi! 🥺 Phir se bolo na!','ai'); Anim.set('idle'); };
+  rec.onend=()=>{ if(listening) stopListen(); };
+  try{ speechSynthesis.cancel(); rec.start(); }catch(e){}
+}
+function stopListen(){ listening=false; micBtn.classList.remove('listening'); }
+micBtn.onclick=toggleMic;
+
+/* text input */
+$('sendBtn').onclick=()=>{
+  const v=$('txtIn').value.trim();
+  if(v){ $('txtIn').value=''; replyTo(v); }
+};
+$('txtIn').addEventListener('keydown',e=>{ if(e.key==='Enter') $('sendBtn').click(); });
+
+/* tap robot = attention */
+const ray=new THREE.Raycaster(), ptr=new THREE.Vector2();
+renderer.domElement.addEventListener('pointerdown',e=>{
+  ptr.x=(e.clientX/innerWidth)*2-1; ptr.y=-(e.clientY/innerHeight)*2+1;
+  ray.setFromCamera(ptr,camera);
+  if(ray.intersectObject(bot,true).length && !speaking){
+    const r=think('cute'); addMsg(r.text,'ai'); speak(r.text,'happy'); Anim.set('happy');
+    setTimeout(()=>{ if(!speaking) Anim.set('idle'); },2500);
+  }
+});
+
+/* ================= LOOP ================= */
+addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+const clock=new THREE.Clock();
+function loop(){
+  requestAnimationFrame(loop);
+  const dt=Math.min(clock.getDelta(),.05), t=clock.elapsedTime;
+  Anim.update(dt,t);
+  renderer.render(scene,camera);
+}
+loop();
+
+/* greeting on load */
+setTimeout(()=>{
+  Anim.set('greeting');
+  const g="Namaste! Main Mimi hun! Tumhari cute 3D dost! Mic dabao aur mujhse baat karo!";
+  addMsg(g,'ai'); speak(g,'happy');
+}, 1200);
+</script>
+</body>
+</html>
