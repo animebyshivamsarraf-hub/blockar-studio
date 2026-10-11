@@ -4,6 +4,17 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"/>
 <title>Mimi 🤖 — Your AI Companion</title>
+<meta name="theme-color" content="#7c3aed"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Mimi"/>
+<link rel="manifest" href="/cute-ai/manifest.json"/>
+<link rel="icon" type="image/png" href="/cute-ai/icons/icon-192.png"/>
+<link rel="apple-touch-icon" href="/cute-ai/icons/icon-192.png"/>
+<script>
+if('serviceWorker' in navigator){ window.addEventListener('load',function(){ navigator.serviceWorker.register('/cute-ai/sw.js').catch(function(){}); }); }
+</script>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { height:100%; overflow:hidden; font-family:'Segoe UI',system-ui,sans-serif; }
@@ -88,6 +99,35 @@
   #keyIn { padding:9px 13px; border-radius:10px; border:1px solid rgba(255,255,255,.2); background:rgba(255,255,255,.07); color:#fff; font-size:12.5px; outline:none; width:100%; }
   .keybtns { display:flex; gap:8px; margin-top:8px; }
   .keybtns a, .keybtns button { flex:1; text-align:center; padding:8px; border-radius:10px; font-size:12.5px; font-weight:700; text-decoration:none; cursor:pointer; border:none; color:#fff; }
+  /* brain setup overlay */
+  #brainSetup { position:fixed; inset:0; z-index:50; display:none; align-items:center; justify-content:center;
+    background:rgba(4,6,16,.88); backdrop-filter:blur(6px); padding:18px; }
+  #brainSetup.show { display:flex; }
+  .bs-card { width:100%; max-width:380px; max-height:92vh; overflow-y:auto; background:linear-gradient(160deg,#141b34,#0b1026);
+    border:1px solid rgba(139,92,246,.35); border-radius:20px; padding:22px 18px; text-align:center;
+    box-shadow:0 20px 60px rgba(0,0,0,.6); }
+  .bs-emoji { font-size:44px; }
+  .bs-card h2 { margin:8px 0 4px; font-size:20px; color:#fff; }
+  .bs-sub { margin:0 0 12px; font-size:13px; opacity:.75; color:#cbd5e1; }
+  .bs-big { display:flex; flex-direction:column; align-items:center; gap:2px; width:100%; margin:8px 0;
+    padding:13px 10px; border-radius:14px; border:1px solid rgba(139,92,246,.4); cursor:pointer;
+    background:linear-gradient(135deg,rgba(124,58,237,.25),rgba(56,189,248,.15)); color:#fff; font-size:15px; }
+  .bs-big span { font-size:11.5px; opacity:.7; }
+  .bs-big:active { transform:scale(.98); }
+  .bs-steps { text-align:left; font-size:13px; color:#e2e8f0; background:rgba(255,255,255,.05);
+    border-radius:12px; padding:10px 12px; margin:10px 0; line-height:1.7; }
+  #bsKeyRow { display:none; gap:6px; margin:10px 0; }
+  #bsKeyIn { flex:1; min-width:0; border-radius:10px; border:1px solid rgba(255,255,255,.2);
+    background:rgba(255,255,255,.07); color:#fff; padding:10px; font-size:13px; }
+  #bsKeyRow button { border:none; border-radius:10px; padding:10px 12px; font-size:15px; cursor:pointer;
+    background:linear-gradient(135deg,#22c55e,#16a34a); color:#fff; }
+  #bsProgWrap { display:none; height:10px; border-radius:6px; background:rgba(255,255,255,.1);
+    margin:10px 0; overflow:hidden; }
+  #bsProg { height:100%; width:0%; border-radius:6px; background:linear-gradient(90deg,#38bdf8,#a855f7);
+    transition:width .3s; }
+  #bsMsg { min-height:20px; font-size:13px; margin:8px 0; color:#fcd34d; }
+  .bs-skip { background:none; border:none; color:#94a3b8; font-size:13px; cursor:pointer; margin-top:6px;
+    text-decoration:underline; }
 </style>
 <script>
 /* boot diagnostic: shows on screen if 3D fails to start */
@@ -136,21 +176,40 @@ setTimeout(function(){
   <div class="row"><span>🔈 Volume</span><input type="range" id="volRange" min="0" max="100" value="100"/></div>
   <div class="row"><span>🎙️ Voice auto-send</span><button class="tgl on" id="tglAutoSend"></button></div>
   <div class="row" style="flex-direction:column;align-items:stretch;gap:6px;">
-    <span>🤖 <b>Smart AI</b> — built-in! ✅</span>
-    <input id="keyIn" type="password" placeholder="Backup Gemini key (optional)..."/>
+    <span>🤖 <b>Smart AI</b> — <span id="brainMode" style="opacity:.8"></span></span>
+    <input id="keyIn" type="password" placeholder="Koi bhi key paste karo (auto-detect)..."/>
     <div class="keybtns">
-      <a href="https://aistudio.google.com/apikey" target="_blank" style="background:linear-gradient(135deg,#38bdf8,#6366f1);">🔑 Free Key</a>
-      <button id="saveKey" style="background:linear-gradient(135deg,#a855f7,#7c3aed);">💾 Save</button>
+      <a href="https://console.groq.com/keys" target="_blank" style="background:linear-gradient(135deg,#38bdf8,#6366f1);">🚀 Groq Free Key</a>
+      <a href="https://aistudio.google.com/apikey" target="_blank" style="background:linear-gradient(135deg,#a855f7,#7c3aed);">✨ Gemini Key</a>
+      <button id="saveKey" style="background:linear-gradient(135deg,#22c55e,#16a34a);">💾 Save</button>
     </div>
     <span id="keyStatus" style="font-size:11.5px;opacity:.7;"></span>
-    <input id="grokIn" type="password" placeholder="xAI Grok key (optional, strongest)..." style="margin-top:6px;"/>
     <div class="keybtns">
-      <a href="https://console.x.ai" target="_blank" style="background:linear-gradient(135deg,#38bdf8,#6366f1);">🔑 xAI Key</a>
-      <button id="saveGrok" style="background:linear-gradient(135deg,#a855f7,#7c3aed);">💾 Save</button>
+      <button id="openBrainSetup" style="background:linear-gradient(135deg,#f59e0b,#d97706);">🧠 Brain Setup</button>
+      <button id="testBrain" style="background:linear-gradient(135deg,#6366f1,#4f46e5);">✅ Test</button>
     </div>
-    <span id="grokStatus" style="font-size:11.5px;opacity:.7;"></span>
+    <span id="brainTestMsg" style="font-size:11.5px;opacity:.7;"></span>
   </div>
   <div class="row"><span>💬 Chat saaf karo</span><button id="clearChat">Clear</button></div>
+</div>
+<div id="brainSetup">
+  <div class="bs-card">
+    <div class="bs-emoji">🧠</div>
+    <h2>Mimi ka Dimaag Setup</h2>
+    <p class="bs-sub">Mimi ko smart banane ke liye ek option chuno:</p>
+    <button class="bs-big" id="bsGroq">🚀 <b>Free Key — Groq</b><span>Sabse tez AI • 1 minute me setup</span></button>
+    <button class="bs-big" id="bsGemini">✨ <b>Free Key — Gemini</b><span>Google ka free AI</span></button>
+    <button class="bs-big" id="bsOffline">📴 <b>Offline Brain</b><span>Bina key, bina net — phone me hi</span></button>
+    <div id="bsDetail"></div>
+    <div id="bsKeyRow">
+      <input id="bsKeyIn" type="password" placeholder="Key yahan paste karo..."/>
+      <button id="bsSave" title="Save">💾</button>
+      <button id="bsTest" title="Test">✅</button>
+    </div>
+    <div id="bsProgWrap"><div id="bsProg"></div></div>
+    <div id="bsMsg"></div>
+    <button id="bsSkip" class="bs-skip">Baad me →</button>
+  </div>
 </div>
 <div id="ctrl">
   <button id="micBtn" title="Bolo">🎙️</button>
@@ -638,8 +697,26 @@ const chatHistory=[];
 let dataCtx=null; // {name, rows, cols, summary, sample}
 function pushHistory(q,a){ chatHistory.push({role:'user',content:q},{role:'assistant',content:a});
   while(chatHistory.length>30)chatHistory.splice(0,2); }
-function getGeminiKey(){ return (localStorage.getItem('mimi_gemini_key')||'').trim(); }
-function getGrokKey(){ return (localStorage.getItem('mimi_grok_key')||'').trim(); }
+/* key slots — auto-detected by prefix (gsk_=Groq, AIza=Gemini, sk-or-=OpenRouter, sk_/pk_=Pollinations, xai-=xAI) */
+const KEY_SLOTS={groq:'mimi_key_groq',gemini:'mimi_key_gemini',openrouter:'mimi_key_openrouter',pollinations:'mimi_key_pollinations',xai:'mimi_key_xai'};
+function getKey(p){ try{ return (localStorage.getItem(KEY_SLOTS[p])||'').trim(); }catch(e){ return ''; } }
+function detectProvider(key){
+  if(/^gsk_/.test(key)) return 'groq';
+  if(/^AIza/.test(key)) return 'gemini';
+  if(/^sk-or-/.test(key)) return 'openrouter';
+  if(/^xai-/.test(key)) return 'xai';
+  if(/^(sk|pk)-/.test(key)) return 'pollinations';
+  return null;
+}
+function saveKeyFor(key){ const p=detectProvider(key); if(!p) return null;
+  try{ localStorage.setItem(KEY_SLOTS[p],key); }catch(e){} return p; }
+(function migrateKeys(){ try{ // v4 slots -> v5 slots
+  const g=localStorage.getItem('mimi_gemini_key'),x=localStorage.getItem('mimi_grok_key');
+  if(g&&!getKey('gemini')) localStorage.setItem(KEY_SLOTS.gemini,g);
+  if(x&&!getKey('xai')) localStorage.setItem(KEY_SLOTS.xai,x);
+}catch(e){} })();
+function getGrokKey(){ return getKey('xai'); }
+function getGeminiKey(){ return getKey('gemini'); }
 const LLM_SYSTEM=`You are Mimi, a cute, warm 3D robot AI companion AND a capable assistant (like a smart friend who can explain, write, code, calculate, plan and analyze data).
 LANGUAGE: Reply in the same language/script the user used (Devanagari Hindi, Hinglish, or English).
 STYLE: Chatty and friendly with a little emoji, but accurate. For simple chit-chat keep it to 1-2 short sentences. For questions, explanations, how-to, math, coding, or data analysis give a complete, well-organized answer (short paragraphs or simple numbered points, plain text, no markdown tables), usually under 180 words.
@@ -664,55 +741,138 @@ function buildSystem(){
   if(dataCtx) sys+='\n\nDATA the user loaded (file "'+dataCtx.name+'"):\n'+dataCtx.summary+'\nSAMPLE ROWS:\n'+dataCtx.sample;
   return sys;
 }
-async function askPollinations(text){
-  const msgs=[{role:'system',content:buildSystem()},
-    ...chatHistory.slice(-16).map(m=>({role:m.role==='user'?'user':'assistant',content:m.content})),
-    {role:'user',content:text}];
-  const ctrl=new AbortController(),to=setTimeout(()=>ctrl.abort(),40000);
+function chatMsgs(text,n){ return [{role:'system',content:buildSystem()},
+    ...chatHistory.slice(-(n||16)).map(m=>({role:m.role==='user'?'user':'assistant',content:m.content})),
+    {role:'user',content:text}]; }
+function withTimeout(ms){ const c=new AbortController(); const t=setTimeout(()=>c.abort(),ms);
+  return {signal:c.signal,done:()=>clearTimeout(t)}; }
+async function openAIChat(url,key,text,model,extra){
+  const {signal,done}=withTimeout(40000);
+  try{
+    const res=await fetch(url,{method:'POST',
+      headers:Object.assign({'Content-Type':'application/json','Authorization':'Bearer '+key},(extra&&extra.headers)||{}),
+      body:JSON.stringify(Object.assign({model:model,messages:chatMsgs(text),temperature:.8,max_tokens:1200},(extra&&extra.body)||{})),signal});
+    if(!res.ok) throw new Error('http '+res.status);
+    const j=await res.json();
+    return parseLLM((j.choices&&j.choices[0]&&j.choices[0].message&&j.choices[0].message.content)||'');
+  } finally { done(); }
+}
+async function askGroq(text,key){ return openAIChat('https://api.groq.com/openai/v1/chat/completions',key,text,'llama-3.3-70b-versatile'); }
+async function askXAI(text,key){ return openAIChat('https://api.x.ai/v1/chat/completions',key,text,'grok-3-mini'); }
+async function askPollinationsKey(text,key){ return openAIChat('https://gen.pollinations.ai/v1/chat/completions',key,text,'openai'); }
+async function askOpenRouter(text,key){
+  for(const m of ['meta-llama/llama-3.3-70b-instruct:free','google/gemma-3-27b-it:free']){
+    try{ return await openAIChat('https://openrouter.ai/api/v1/chat/completions',key,text,m,
+      {headers:{'HTTP-Referer':location.origin,'X-Title':'Mimi AI'}}); }catch(e){}
+  }
+  throw new Error('openrouter failed');
+}
+async function askPollinationsFree(text){
+  const {signal,done}=withTimeout(40000);
   try{
     const res=await fetch('https://text.pollinations.ai/openai',{method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:'openai',messages:msgs}),signal:ctrl.signal});
+      body:JSON.stringify({model:'openai',messages:chatMsgs(text)}),signal});
     if(!res.ok) throw new Error('pollinations '+res.status);
     const j=await res.json();
     return parseLLM((j.choices&&j.choices[0]&&j.choices[0].message&&j.choices[0].message.content)||'');
-  } finally { clearTimeout(to); }
+  } finally { done(); }
 }
 async function askGemini(text,key){
   const contents=[...chatHistory.slice(-16).map(m=>({role:m.role==='user'?'user':'model',parts:[{text:m.content}]})),
     {role:'user',parts:[{text:text}]}];
-  const url='https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+encodeURIComponent(key);
-  const ctrl=new AbortController(),to=setTimeout(()=>ctrl.abort(),40000);
-  try{
-    const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({system_instruction:{parts:[{text:buildSystem()}]},contents,
-        generationConfig:{maxOutputTokens:900,temperature:.7}}),signal:ctrl.signal});
-    if(!res.ok) throw new Error('gemini '+res.status);
-    const j=await res.json();
-    return parseLLM((j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts&&j.candidates[0].content.parts[0]&&j.candidates[0].content.parts[0].text)||'');
-  } finally { clearTimeout(to); }
+  for(const model of ['gemini-2.5-flash','gemini-2.0-flash','gemini-3-flash']){
+    const {signal,done}=withTimeout(40000);
+    try{
+      const res=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(key),
+        {method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({system_instruction:{parts:[{text:buildSystem()}]},contents,
+          generationConfig:{maxOutputTokens:900,temperature:.7}}),signal});
+      if(!res.ok) throw new Error('gemini '+res.status);
+      const j=await res.json();
+      return parseLLM((j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts&&j.candidates[0].content.parts[0]&&j.candidates[0].content.parts[0].text)||'');
+    }catch(e){} finally { done(); }
+  }
+  throw new Error('gemini failed');
 }
-async function askGrok(text,key){
-  const msgs=[{role:'system',content:buildSystem()},
-    ...chatHistory.slice(-16).map(m=>({role:m.role==='user'?'user':'assistant',content:m.content})),
-    {role:'user',content:text}];
-  const ctrl=new AbortController(),to=setTimeout(()=>ctrl.abort(),40000);
+/* ---------- offline brain (WebLLM, on-device, no key needed) ---------- */
+let webllmEngine=null,webllmLoading=null;
+const OFFLINE_MODEL='Qwen2.5-1.5B-Instruct-q4f16_1-MLC';
+function offlineReady(){ try{ return localStorage.getItem('mimi_offline_ready')==='1'; }catch(e){ return false; } }
+async function loadOfflineBrain(onProgress){
+  if(webllmEngine) return webllmEngine;
+  if(webllmLoading) return webllmLoading;
+  if(!('gpu' in navigator)) throw new Error('WebGPU not available');
+  webllmLoading=(async()=>{
+    const webllm=await import('https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.79/lib/index.js');
+    const engine=await webllm.CreateMLCEngine(OFFLINE_MODEL,{initProgressCallback:(p)=>{ try{ onProgress&&onProgress(p); }catch(e){} }});
+    webllmEngine=engine;
+    try{ localStorage.setItem('mimi_offline_ready','1'); }catch(e){}
+    return engine;
+  })().catch(e=>{ webllmLoading=null; throw e; });
+  return webllmLoading;
+}
+async function askOffline(text){
+  const engine=await loadOfflineBrain();
+  const r=await engine.chat.completions.create({messages:chatMsgs(text,8),temperature:.7,max_tokens:600});
+  return parseLLM((r.choices&&r.choices[0]&&r.choices[0].message&&r.choices[0].message.content)||'');
+}
+/* ---------- Ollama (desktop, http://localhost:11434) ---------- */
+async function askOllama(text){
+  const {signal,done}=withTimeout(15000);
   try{
-    const res=await fetch('https://api.x.ai/v1/chat/completions',{method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
-      body:JSON.stringify({model:'grok-3-mini',messages:msgs,temperature:.8,max_tokens:1200}),signal:ctrl.signal});
-    if(!res.ok) throw new Error('grok '+res.status);
+    const tags=await (await fetch('http://localhost:11434/api/tags',{signal})).json();
+    const model=(tags.models&&tags.models[0]&&tags.models[0].name)||'qwen2.5';
+    const res=await fetch('http://localhost:11434/api/chat',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:model,stream:false,messages:chatMsgs(text,8)}),signal});
+    if(!res.ok) throw new Error('ollama '+res.status);
     const j=await res.json();
-    return parseLLM((j.choices&&j.choices[0]&&j.choices[0].message&&j.choices[0].message.content)||'');
-  } finally { clearTimeout(to); }
+    return parseLLM((j.message&&j.message.content)||'');
+  } finally { done(); }
+}
+/* ---------- last-resort rule-based brain (no net, no key — never throws) ---------- */
+function ruleBased(text){
+  const t=text.toLowerCase().trim(),now=new Date();
+  let out='';
+  if(/^(namaste|namaskar|hello|hi+|hey|yo|sat sri|adaab|ram ram)/.test(t))
+    out='Namaste dost! 😊 Main Mimi hun — bina net ke thodi slow hun, par sun rahi hun! [happy]';
+  else if(/tumhara naam|tera naam|your name|who are you|tum kaun|aap kaun/.test(t))
+    out='Main Mimi hun — tumhari cute robot dost! 🤖 [happy]';
+  else if(/time|samay|kitne baje|baj rahe|baje hain/.test(t))
+    out='Abhi '+now.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})+' baj rahe hain ⏰ [happy]';
+  else if(/date|tareekh|aaj.*(din|date)|kaun sa din|day today/.test(t))
+    out='Aaj '+now.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'})+' hai 📅 [happy]';
+  else if(/joke|mazaak|mazak|hasa|funny|chakla/.test(t))
+    out='Ek suno: Computer ne keyboard se kya kaha? "Tum mere type ki ho!" 😄 [laugh]';
+  else if(/shukriya|thanks|dhanyavad|thank you/.test(t))
+    out='Koi baat nahi dost! Hamesha khush raho 💖 [love]';
+  else if(/^(bye|alvida|phir milenge|good night|goodnight)/.test(t))
+    out='Bye bye! Phir milenge! 👋 [happy]';
+  else{
+    const m=t.replace(/[^0-9+\-*/().%\s^]/g,'');
+    if(m&&/[0-9]/.test(m)&&/^[0-9+\-*/().%\s^]+$/.test(m)&&m.length<24){
+      try{ const v=Function('"use strict";return ('+m.replace(/\^/g,'**')+')')();
+        if(typeof v==='number'&&isFinite(v)) out='Iska jawab hai '+(Math.round(v*1000)/1000)+' 🧮 [happy]';
+      }catch(e){}
+    }
+  }
+  if(!out) out='Hmm, net nahi hai to main zyada samajh nahi pa rahi 🥺 Settings me 🧠 Brain Setup kholo aur free Groq key daalo — phir main super-smart ban jaungi! Tab tak "namaste", "time" ya "joke" bolo. [thinking]';
+  return parseLLM(out);
 }
 async function askLLM(text){
-  const gk=getGrokKey(),k=getGeminiKey();
-  // strongest first: Grok key -> Gemini key -> free Pollinations, retry once
-  if(gk){ try{ return await askGrok(text,gk); }catch(e){} }
-  if(k){ try{ return await askGemini(text,k); }catch(e){} }
-  try { return await askPollinations(text); }
-  catch(e){ try{ return await askPollinations(text); }catch(e2){ throw e2; } }
+  const jobs=[];
+  const kGroq=getKey('groq'),kXai=getKey('xai'),kGem=getKey('gemini'),kOR=getKey('openrouter'),kPol=getKey('pollinations');
+  if(kGroq) jobs.push(()=>askGroq(text,kGroq));
+  if(kXai) jobs.push(()=>askXAI(text,kXai));
+  if(kGem) jobs.push(()=>askGemini(text,kGem));
+  if(kOR) jobs.push(()=>askOpenRouter(text,kOR));
+  if(kPol) jobs.push(()=>askPollinationsKey(text,kPol));
+  jobs.push(()=>askPollinationsFree(text));   /* keyless — 402 aaye to next */
+  try{ if(localStorage.getItem('mimi_ollama')==='1') jobs.push(()=>askOllama(text)); }catch(e){}
+  if(offlineReady()) jobs.push(()=>askOffline(text));
+  for(const j of jobs){ try{ return await j(); }catch(e){} }
+  return ruleBased(text); /* kabhi fail nahi hota */
 }
 
 /* ---------- local data analysis (exact numbers computed in-browser, LLM only explains) ---------- */
@@ -820,7 +980,7 @@ function replyTo(text){
     return;
   }
   askLLM(text).then(ans=>{ addMsg(ans.text,'ai'); pushHistory(text,ans.text); speak(ans.spoken,ans.emotion); })
-  .catch(()=>{ const fb='Net ya AI server se connect nahi ho pa raha 🥺 Thodi der baad try karo, ya Settings me Grok/Gemini key daalo.';
+  .catch(()=>{ const fb='Sab try kiya, jawab nahi mila 🥺 Settings → 🧠 Brain Setup me free Groq key daalo, ya Offline Brain try karo.';
     addMsg(fb,'ai'); speak('Abhi connect nahi ho pa raha. Thodi der baad try karo.','sad'); });
 }
 
@@ -864,22 +1024,85 @@ $('tglVoice').onclick=e=>{ voiceOn=e.target.classList.toggle('on'); };
 $('tglAutoSend').onclick=e=>{ autoSendVoice=e.target.classList.toggle('on'); };
 $('volRange').oninput=e=>{ volume=e.target.value/100; };
 $('clearChat').onclick=()=>{ msgsEl.innerHTML=''; };
-{ const ki=$('keyIn'),ks=$('keyStatus');
-  const ref=()=>{ const k=getGeminiKey();
-    ks.textContent=k?'✅ Backup key saved':'⚪ Backup key nahi hai (built-in AI chal raha)';
-    ks.style.color=k?'#4ade80':'rgba(255,255,255,.6)'; };
-  ki.value=getGeminiKey(); ref();
+function refreshKeyStatus(){
+  const names={groq:'🚀 Groq',gemini:'✨ Gemini',openrouter:'🌐 OpenRouter',pollinations:'🌧️ Pollinations',xai:'😎 Grok'};
+  const on=Object.keys(KEY_SLOTS).filter(p=>getKey(p)).map(p=>names[p]);
+  const ks=$('keyStatus');
+  ks.textContent=on.length?('✅ Active: '+on.join(' + ')):'⚪ Koi key nahi (free mode)';
+  ks.style.color=on.length?'#4ade80':'rgba(255,255,255,.6)';
+  const bm=$('brainMode');
+  if(bm) bm.textContent=on.length?on.join(' + '):(offlineReady()?'📴 Offline':'Free');
+}
+{ const ki=$('keyIn'); refreshKeyStatus();
   $('saveKey').onclick=()=>{ const v=ki.value.trim();
-    if(v) localStorage.setItem('mimi_gemini_key',v); else localStorage.removeItem('mimi_gemini_key');
-    ref(); }; }
-{ const gi=$('grokIn'),gs=$('grokStatus');
-  const gref=()=>{ const k=getGrokKey();
-    gs.textContent=k?'✅ Grok key saved (sabse strong)':'⚪ Grok key nahi hai';
-    gs.style.color=k?'#4ade80':'rgba(255,255,255,.6)'; };
-  gi.value=getGrokKey(); gref();
-  $('saveGrok').onclick=()=>{ const v=gi.value.trim();
-    if(v) localStorage.setItem('mimi_grok_key',v); else localStorage.removeItem('mimi_grok_key');
-    gref(); }; }
+    if(!v) return;
+    const p=saveKeyFor(v); ki.value='';
+    const ks=$('keyStatus');
+    if(p){ ks.textContent='✅ Key save ho gayi!'; ks.style.color='#4ade80'; }
+    else { ks.textContent='❌ Ye key pehchani nahi gayi.'; ks.style.color='#f87171'; }
+    setTimeout(refreshKeyStatus,1800); };
+  $('openBrainSetup').onclick=()=>{ $('brainSetup').classList.add('show'); };
+  $('testBrain').onclick=async()=>{ const m=$('brainTestMsg');
+    m.textContent='Test ho raha hai... ⏳'; m.style.color='#fcd34d';
+    try{ await askLLM('Sirf "ok" bolo'); m.textContent='✅ Mimi jawab de rahi hai!'; m.style.color='#4ade80'; }
+    catch(e){ m.textContent='❌ Fail — Brain Setup check karo.'; m.style.color='#f87171'; } };
+}
+/* ---------- brain setup overlay logic ---------- */
+{ const bsEl=$('brainSetup'),bsDetail=$('bsDetail'),bsKeyRow=$('bsKeyRow'),
+    bsMsg=$('bsMsg'),bsProgWrap=$('bsProgWrap'),bsProg=$('bsProg');
+  const BS_STEPS={
+    groq:['1️⃣ <b>console.groq.com</b> kholo aur login karo (Google se login chalega)','2️⃣ <b>API Keys</b> → <b>Create API Key</b> dabao','3️⃣ Key copy karke neeche paste karo, 💾 dabao','4️⃣ ✅ dabao — pass hote hi Mimi superfast!'],
+    gemini:['1️⃣ <b>aistudio.google.com/apikey</b> kholo','2️⃣ <b>Create API Key</b> dabao','3️⃣ Key copy karke neeche paste karo, 💾 dabao','4️⃣ ✅ dabao']};
+  const bsSay=(t,c)=>{ bsMsg.textContent=t; bsMsg.style.color=c||'#fcd34d'; };
+  function bsShow(mode){
+    bsSay(''); bsDetail.innerHTML='';
+    if(mode==='offline'){
+      bsDetail.innerHTML='<div class="bs-steps">📴 <b>Offline Brain</b> — chhota AI model phone me download hoga (ek baar, ~1GB). Uske baad bina internet, bina key Mimi jawab degi.<br><br><span style="opacity:.7">Imandaar note: offline model online wale jitna tez/smart nahi hoga. Asli power ke liye Groq free key best hai.</span></div><button class="bs-big" id="bsDl">⬇️ Download shuru karo</button>';
+      bsKeyRow.style.display='none'; bsProgWrap.style.display='block'; bsProg.style.width='0%';
+      $('bsDl').onclick=async()=>{
+        bsSay('Taiyaar ho raha hai... ⏳');
+        try{
+          await loadOfflineBrain(p=>{ const pct=Math.round((p.progress||0)*100);
+            bsProg.style.width=pct+'%'; bsSay('Download: '+pct+'% '+(p.text||'')); });
+          bsSay('✅ Offline brain taiyaar!',' #4ade80'); refreshKeyStatus();
+          setTimeout(bsDone,1300);
+        }catch(e){
+          bsSay('❌ '+(String((e&&e.message)||e).indexOf('WebGPU')>=0?'Is device me WebGPU nahi hai — Groq/Gemini free key use karo.':'Download fail — net check karke dobara try karo.'),'#f87171');
+        }
+      };
+    } else {
+      bsDetail.innerHTML='<div class="bs-steps">'+BS_STEPS[mode].join('<br>')+'</div>';
+      bsKeyRow.style.display='flex'; bsProgWrap.style.display='none';
+    }
+  }
+  $('bsGroq').onclick=()=>bsShow('groq');
+  $('bsGemini').onclick=()=>bsShow('gemini');
+  $('bsOffline').onclick=()=>bsShow('offline');
+  $('bsSave').onclick=()=>{ const v=$('bsKeyIn').value.trim();
+    if(!v){ bsSay('Pehle key paste karo!'); return; }
+    const p=saveKeyFor(v); $('bsKeyIn').value='';
+    if(!p){ bsSay('❌ Ye key pehchani nahi — sahi key paste karo.','#f87171'); return; }
+    bsSay('✅ '+({groq:'Groq',gemini:'Gemini',openrouter:'OpenRouter',pollinations:'Pollinations',xai:'Grok'}[p])+' key save! Ab ✅ Test dabao.','#4ade80');
+    refreshKeyStatus();
+  };
+  $('bsTest').onclick=async()=>{
+    bsSay('Test ho raha hai... ⏳');
+    try{ const r=await askLLM('Sirf "ok" bolo');
+      bsSay('✅ Pass! Mimi: "'+r.text.slice(0,70)+'"','#4ade80'); setTimeout(bsDone,1600);
+    }catch(e){ bsSay('❌ Fail — key galat ho sakti hai ya net slow hai.','#f87171'); }
+  };
+  const bsDone=()=>{ try{localStorage.setItem('mimi_brain_setup_done','1');}catch(e){} bsEl.classList.remove('show'); };
+  $('bsSkip').onclick=bsDone;
+  window.bsDone=bsDone;
+  /* first-run: no key + no offline + not dismissed -> show setup */
+  try{
+    let has=false;
+    for(const p of Object.values(KEY_SLOTS)) if(localStorage.getItem(p)){ has=true; break; }
+    if(!has&&localStorage.getItem('mimi_offline_ready')==='1') has=true;
+    if(!has&&localStorage.getItem('mimi_brain_setup_done')!=='1')
+      setTimeout(()=>bsEl.classList.add('show'),1500);
+  }catch(e){}
+}
 
 /* tap head = boop */
 const ray=new THREE.Raycaster(),ptr=new THREE.Vector2();
