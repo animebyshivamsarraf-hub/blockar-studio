@@ -477,6 +477,7 @@ setTimeout(function(){
     <p class="bs-sub">Mimi ko smart banane ke liye ek option chuno:</p>
     <button class="bs-big" id="bsGroq">🚀 <b>Free Key — Groq</b><span>Sabse tez AI • 1 minute me setup</span></button>
     <button class="bs-big" id="bsGemini">✨ <b>Free Key — Gemini</b><span>Google ka free AI</span></button>
+    <button class="bs-big" id="bsOllama">🦙 <b>Free — Ollama Cloud</b><span>Bade open models • free credits</span></button>
     <button class="bs-big" id="bsOffline">📴 <b>Offline Brain</b><span>Bina key, bina net — phone me hi</span></button>
     <div id="bsDetail"></div>
     <div id="bsKeyRow">
@@ -1032,8 +1033,8 @@ const chatHistory=[];
 let dataCtx=null; // {name, rows, cols, summary, sample}
 function pushHistory(q,a){ chatHistory.push({role:'user',content:q},{role:'assistant',content:a});
   while(chatHistory.length>30)chatHistory.splice(0,2); }
-/* key slots — auto-detected by prefix (gsk_=Groq, AIza=Gemini, sk-or-=OpenRouter, sk_/pk_=Pollinations, xai-=xAI) */
-const KEY_SLOTS={groq:'mimi_key_groq',gemini:'mimi_key_gemini',openrouter:'mimi_key_openrouter',pollinations:'mimi_key_pollinations',xai:'mimi_key_xai'};
+/* key slots — auto-detected by prefix (gsk_=Groq, AIza=Gemini, OpenRouter, sk_/pk_=Pollinations, xai-=xAI, hex.hex=Ollama cloud) */
+const KEY_SLOTS={groq:'mimi_key_groq',gemini:'mimi_key_gemini',openrouter:'mimi_key_openrouter',pollinations:'mimi_key_pollinations',xai:'mimi_key_xai',ollama:'mimi_key_ollama'};
 function getKey(p){ try{ return (localStorage.getItem(KEY_SLOTS[p])||'').trim(); }catch(e){ return ''; } }
 function detectProvider(key){
   if(/^gsk_/.test(key)) return 'groq';
@@ -1041,6 +1042,7 @@ function detectProvider(key){
   if(/^sk-or-/.test(key)) return 'openrouter';
   if(/^xai-/.test(key)) return 'xai';
   if(/^(sk|pk)-/.test(key)) return 'pollinations';
+  if(/^[0-9a-f]{32,64}\.[A-Za-z0-9_\-]{16,}$/.test(key)) return 'ollama'; /* ollama.com cloud key */
   return null;
 }
 function saveKeyFor(key){ const p=detectProvider(key); if(!p) return null;
@@ -1166,6 +1168,29 @@ async function askOllama(text){
     return parseLLM((j.message&&j.message.content)||'');
   } finally { done(); }
 }
+/* ---------- Ollama Cloud (ollama.com, key-based, free credits) ---------- */
+async function askOllamaCloud(text,key){
+  const {signal,done}=withTimeout(45000);
+  try{
+    let models=[];
+    try{ /* available cloud models pata karo */
+      const t=await (await fetch('https://ollama.com/api/tags',
+        {headers:{'Authorization':'Bearer '+key},signal})).json();
+      models=(t.models||[]).map(m=>m.name).filter(Boolean);
+    }catch(e){}
+    for(const m of models.concat(['gpt-oss:120b-cloud','gemma3:27b','qwen3:32b'])){
+      try{
+        const res=await fetch('https://ollama.com/api/chat',{method:'POST',
+          headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+          body:JSON.stringify({model:m,stream:false,messages:chatMsgs(text)}),signal});
+        if(!res.ok) throw new Error('ollama-cloud '+res.status);
+        const j=await res.json();
+        return parseLLM((j.message&&j.message.content)||'');
+      }catch(e){}
+    }
+    throw new Error('ollama-cloud failed');
+  } finally { done(); }
+}
 /* ---------- last-resort rule-based brain (no net, no key — never throws) ---------- */
 function ruleBased(text){
   const t=text.toLowerCase().trim(),now=new Date();
@@ -1197,11 +1222,12 @@ function ruleBased(text){
 }
 async function askLLM(text){
   const jobs=[];
-  const kGroq=getKey('groq'),kXai=getKey('xai'),kGem=getKey('gemini'),kOR=getKey('openrouter'),kPol=getKey('pollinations');
+  const kGroq=getKey('groq'),kXai=getKey('xai'),kGem=getKey('gemini'),kOR=getKey('openrouter'),kPol=getKey('pollinations'),kOll=getKey('ollama');
   if(kGroq) jobs.push(()=>askGroq(text,kGroq));
   if(kXai) jobs.push(()=>askXAI(text,kXai));
   if(kGem) jobs.push(()=>askGemini(text,kGem));
   if(kOR) jobs.push(()=>askOpenRouter(text,kOR));
+  if(kOll) jobs.push(()=>askOllamaCloud(text,kOll));
   if(kPol) jobs.push(()=>askPollinationsKey(text,kPol));
   jobs.push(()=>askPollinationsFree(text));   /* keyless — 402 aaye to next */
   try{ if(localStorage.getItem('mimi_ollama')==='1') jobs.push(()=>askOllama(text)); }catch(e){}
@@ -1452,7 +1478,7 @@ $('wipeAll').onclick=()=>{ if(confirm('Saara data delete ho jayega (keys, histor
 /* history init */
 Hist.load(); Hist.start();
 function refreshKeyStatus(){
-  const names={groq:'🚀 Groq',gemini:'✨ Gemini',openrouter:'🌐 OpenRouter',pollinations:'🌧️ Pollinations',xai:'😎 Grok'};
+  const names={groq:'🚀 Groq',gemini:'✨ Gemini',openrouter:'🌐 OpenRouter',pollinations:'🌧️ Pollinations',xai:'😎 Grok',ollama:'🦙 Ollama Cloud'};
   const on=Object.keys(KEY_SLOTS).filter(p=>getKey(p)).map(p=>names[p]);
   const ks=$('keyStatus');
   ks.textContent=on.length?('✅ Active: '+on.join(' + ')):'⚪ Koi key nahi (free mode)';
@@ -1479,7 +1505,8 @@ function refreshKeyStatus(){
     bsMsg=$('bsMsg'),bsProgWrap=$('bsProgWrap'),bsProg=$('bsProg');
   const BS_STEPS={
     groq:['1️⃣ <b>console.groq.com</b> kholo aur login karo (Google se login chalega)','2️⃣ <b>API Keys</b> → <b>Create API Key</b> dabao','3️⃣ Key copy karke neeche paste karo, 💾 dabao','4️⃣ ✅ dabao — pass hote hi Mimi superfast!'],
-    gemini:['1️⃣ <b>aistudio.google.com/apikey</b> kholo','2️⃣ <b>Create API Key</b> dabao','3️⃣ Key copy karke neeche paste karo, 💾 dabao','4️⃣ ✅ dabao']};
+    gemini:['1️⃣ <b>aistudio.google.com/apikey</b> kholo','2️⃣ <b>Create API Key</b> dabao','3️⃣ Key copy karke neeche paste karo, 💾 dabao','4️⃣ ✅ dabao'],
+    ollama:['1️⃣ <b>ollama.com</b> kholo aur sign in karo','2️⃣ Profile → <b>API Keys</b> → <b>Get API key</b> dabao','3️⃣ Poori key copy karke neeche paste karo, 💾 dabao','4️⃣ ✅ dabao — bade open models free credits par!']};
   const bsSay=(t,c)=>{ bsMsg.textContent=t; bsMsg.style.color=c||'#fcd34d'; };
   function bsShow(mode){
     bsSay(''); bsDetail.innerHTML='';
@@ -1504,12 +1531,13 @@ function refreshKeyStatus(){
   }
   $('bsGroq').onclick=()=>bsShow('groq');
   $('bsGemini').onclick=()=>bsShow('gemini');
+  $('bsOllama').onclick=()=>bsShow('ollama');
   $('bsOffline').onclick=()=>bsShow('offline');
   $('bsSave').onclick=()=>{ const v=$('bsKeyIn').value.trim();
     if(!v){ bsSay('Pehle key paste karo!'); return; }
     const p=saveKeyFor(v); $('bsKeyIn').value='';
     if(!p){ bsSay('❌ Ye key pehchani nahi — sahi key paste karo.','#f87171'); return; }
-    bsSay('✅ '+({groq:'Groq',gemini:'Gemini',openrouter:'OpenRouter',pollinations:'Pollinations',xai:'Grok'}[p])+' key save! Ab ✅ Test dabao.','#4ade80');
+    bsSay('✅ '+({groq:'Groq',gemini:'Gemini',openrouter:'OpenRouter',pollinations:'Pollinations',xai:'Grok',ollama:'Ollama Cloud'}[p])+' key save! Ab ✅ Test dabao.','#4ade80');
     refreshKeyStatus();
   };
   $('bsTest').onclick=async()=>{
