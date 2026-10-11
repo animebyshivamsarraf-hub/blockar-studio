@@ -1,7 +1,6 @@
 /* Mimi PWA service worker — app shell offline, APIs hamesha network se */
 const CACHE='mimi-v5';
-const SHELL=['/cute-ai/','/cute-ai/index.html','/cute-ai/manifest.json',
-  '/cute-ai/icons/icon-192.png','/cute-ai/icons/icon-512.png'];
+const SHELL=['/cute-ai/','/cute-ai/index.html','/cute-ai/manifest.json','/cute-ai/icons/icon.svg'];
 self.addEventListener('install',e=>{
   e.waitUntil(caches.open(CACHE).then(c=>c.addAll(SHELL)).then(()=>self.skipWaiting()).catch(()=>self.skipWaiting()));
 });
