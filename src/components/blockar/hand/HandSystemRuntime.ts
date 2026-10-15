@@ -116,8 +116,9 @@ export class HandSystemRuntime {
   private lastHandRenderT = 0;
   private workerRestarting = false;
   private workerRestartCount = 0;
-  // FIX: Android Chrome GPU delegate often hangs/crashes. Start with CPU directly on Android.
-  private workerDelegate: "GPU" | "CPU" = /Android/i.test(navigator.userAgent) ? "CPU" : "GPU";
+  // FIX 3: Phones (Android/iPhone/Mobile) start with CPU — GPU delegate hangs on mobile.
+  // Desktop keeps GPU for performance.
+  private workerDelegate: "GPU" | "CPU" = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) ? "CPU" : "GPU";
   private lastResultT = 0;
   private recoveryTimer: number | null = null;
   private static readonly MAX_WORKER_RESTARTS = MAX_WORKER_RESTARTS;
