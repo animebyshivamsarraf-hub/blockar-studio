@@ -304,8 +304,14 @@ export class HandSystemRuntime {
       throw new Error("Rear camera required — the opened camera is not the environment camera. BlockAR never uses the front camera.");
     }
     this.stream = s;
-    this.video.srcObject = s;
-    await this.video.play().catch(() => {});
+    // FIX: Don't reassign srcObject or restart playback if video already shows this stream.
+    // On Android, re-setting the same stream can freeze the video element.
+    if (this.video.srcObject !== s) {
+      this.video.srcObject = s;
+    }
+    if (this.video.paused) {
+      await this.video.play().catch(() => {});
+    }
     this.session = "camera live";
     this.set("INITIALIZING");
     const isPhone = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
