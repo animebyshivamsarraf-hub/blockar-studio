@@ -4,21 +4,19 @@ import { HandSkeleton3D } from "./HandSkeleton3D";
 import { PinchStateMachine, type PinchPhase } from "./PinchStateMachine";
 import { liftLandmarks, syntheticHand, XR_TO_MP_JOINTS, type ScreenLandmark } from "./landmarkMapping";
 import { GrabController3D } from "../interaction/GrabController3D";
+import { FrameGate } from "./frameGate";
+import { MAX_WORKER_RESTARTS, WORKER_INFERENCE_TIMEOUT_MS } from "./workerPolicy";
+import type { FrameSource } from "../camera/CameraOwnership";
 
-// WASM is bundled with the app (public/wasm/) instead of CDN — eliminates
-// CDN/version-mismatch failures ("ModuleFactory not set") entirely.
-// Lazy: module is also imported in non-DOM test environments.
-const getWasmUrl = () => `${window.location.origin}/wasm`;
-// Model is bundled with the app (public/models/) — zero runtime CDN dependency.
-// Lazy: module is also imported in non-DOM test environments.
-const getModelUrl = () => `${window.location.origin}/models/hand_landmarker.task`;
+const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
+const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
 export type SystemState = "OFF" | "STARTING" | "INITIALIZING" | "TRACKING" | "ERROR";
 export type Backend = "NONE" | "WEBXR" | "MEDIAPIPE" | "DEMO";
 export type Side = "left" | "right";
 export type TrackStatus = "not detected" | "tracking" | "lost" | "reacquiring";
 
-export interface HandInfo { status: TrackStatus; pinch: PinchPhase; ratio: number; smoothRatio?: number; grabbing: boolean }
+export interface HandInfo { status: TrackStatus; pinch: PinchPhase; ratio: number; grabbing: boolean }
 export interface HandDiagnostics {
   system: SystemState;
   backend: Backend;
@@ -71,8 +69,8 @@ const CUBE_SIZE = 0.08;
 // detectForVideo() is synchronous, so running it on every render frame can
 // stall Chrome on mid-range phones. Hand tracking remains responsive at a
 // bounded 15 FPS while the camera and 3D scene continue rendering normally.
-const MP_INTERVAL_MS = 1000 / 20;
-const MP_INTERVAL_CPU_MS = 1000 / 12;
+const MP_INTERVAL_MS = 1000 / 15;
+const MP_INTERVAL_CPU_MS = 1000 / 10;
 const HAND_RENDER_INTERVAL_MS = 1000 / 30;
 const HAND_COLORS: Record<Side, number> = { left: 0x7fb8ff, right: 0x4de8ff };
 
@@ -85,7 +83,6 @@ interface HandState {
   lastSeen: number;
   reacquire: number;
   ratio: number;
-  smoothRatio: number;
   depth: number | null;
   pinchPoint: THREE.Vector3;
 }
@@ -110,22 +107,33 @@ export class HandSystemRuntime {
   private landmarker: HandLandmarker | null = null;
   private handWorker: Worker | null = null;
   private workerReady = false;
-  private workerBusy = false;
+  /** Strict one-frame-in-flight gate with generation tokens. */
+  private gate = new FrameGate();
   private lastVideoTime = -1;
+  private lastVideoAdvanceT = 0;
   private lastMpDetectT = 0;
   private mpIntervalMs = MP_INTERVAL_MS;
   private lastHandRenderT = 0;
-  private lastWorkerSubmitT = 0;
   private workerRestarting = false;
   private workerRestartCount = 0;
-  private static readonly MAX_WORKER_RESTARTS = 3;
-  private static readonly WORKER_INFERENCE_TIMEOUT_MS = 3500;
+  // FIX: Android Chrome GPU delegate often hangs/crashes. Start with CPU directly on Android.
+  private workerDelegate: "GPU" | "CPU" = /Android/i.test(navigator.userAgent) ? "CPU" : "GPU";
+  private lastResultT = 0;
+  private recoveryTimer: number | null = null;
+  private static readonly MAX_WORKER_RESTARTS = MAX_WORKER_RESTARTS;
+  private static readonly WORKER_INFERENCE_TIMEOUT_MS = WORKER_INFERENCE_TIMEOUT_MS;
+  private static readonly BITMAP_TIMEOUT_MS = 1200;
+  private static readonly RECOVERY_COOLDOWN_MS = 8000;
   private lastSentTimestamp = 0;
-  // Monotonic submission token prevents a late createImageBitmap() completion
-  // from reusing an inference slot after its safety timeout already fired.
-  private workerSubmissionId = 0;
   private mpFrame: Partial<Record<Side, ScreenLandmark[]>> = {};
   private mpGeneration = 0;
+  /** Which producer feeds hand frames: DOM video, XR raw camera, or nothing (paused). */
+  private frameSource: FrameSource = "video";
+  private srcW = 640;
+  private srcH = 480;
+  /** Fired when the DOM video stream stalls/ends so the host can reacquire the camera. */
+  onCameraStalled: ((reason: string) => void) | null = null;
+  private stallReported = false;
   private xrSession: XRSession | null = null;
   private externalStream = false;
   private xrStartT = 0;
@@ -185,7 +193,7 @@ export class HandSystemRuntime {
       ring.visible = false;
       ring.renderOrder = 11;
       this.scene.add(ring);
-      return { side, skeleton, ring, pinch: new PinchStateMachine(), status: "not detected", lastSeen: 0, reacquire: 0, ratio: 1, smoothRatio: 1, depth: null, pinchPoint: new THREE.Vector3() };
+      return { side, skeleton, ring, pinch: new PinchStateMachine(), status: "not detected", lastSeen: 0, reacquire: 0, ratio: 1, depth: null, pinchPoint: new THREE.Vector3() };
     };
     this.hands = { left: mk("left"), right: mk("right") };
 
@@ -200,7 +208,7 @@ export class HandSystemRuntime {
   }
 
   // ---------- lifecycle ----------
-  async start(mode: "auto" | "webxr" | "mediapipe" | "demo", opts: { stream?: MediaStream } = {}) {
+  async start(mode: "auto" | "webxr" | "mediapipe" | "demo", opts: { stream?: MediaStream; frameSource?: FrameSource } = {}) {
     if (this.system === "STARTING" || this.system === "INITIALIZING") return;
     await this.stop();
     this.error = null;
@@ -208,7 +216,7 @@ export class HandSystemRuntime {
       let chosen = mode;
       if (mode === "auto") chosen = (await HandSystemRuntime.webxrSupported()) ? "webxr" : "mediapipe";
       if (chosen === "webxr") await this.startWebXR();
-      else if (chosen === "mediapipe") await this.startMediaPipe(opts.stream);
+      else if (chosen === "mediapipe") await this.startMediaPipe(opts.stream, opts.frameSource ?? "video");
       else this.startDemo();
       this.set("TRACKING");
     } catch (e: unknown) {
@@ -251,8 +259,22 @@ export class HandSystemRuntime {
     this.xrStartT = performance.now();
   }
 
-  private async startMediaPipe(external?: MediaStream) {
-    this.backend = "MEDIAPIPE"; this.set("STARTING"); this.session = "requesting rear camera";
+  private async startMediaPipe(external?: MediaStream, frameSource: FrameSource = "video") {
+    this.backend = "MEDIAPIPE"; this.set("STARTING");
+    this.frameSource = frameSource;
+    if (frameSource !== "video") {
+      // XR raw-camera (or paused) mode: the XR session owns the camera, so we
+      // must not open a competing getUserMedia stream. Frames arrive via submitPixels().
+      this.session = frameSource === "xr" ? "XR raw camera frames" : "paused (camera owned by AR)";
+      this.set("INITIALIZING");
+      const generation = ++this.mpGeneration;
+      this.workerRestartCount = 0;
+      this.mpIntervalMs = MP_INTERVAL_CPU_MS;
+      await this.startMediaPipeWorker(generation);
+      this.resetCube();
+      return;
+    }
+    this.session = "requesting rear camera";
     let s: MediaStream;
     if (external && external.getVideoTracks().some((t) => t.readyState === "live")) {
       s = external; this.externalStream = true;
@@ -286,44 +308,17 @@ export class HandSystemRuntime {
     // On phones this keeps WASM/GPU inference away from the camera + Three.js
     // main thread, which is the important difference from detectAsync alone.
     if (isPhone) {
-      // Keep all vision inference off the UI/render thread on phones. The
-      // synchronous CPU fallback can block the same thread that handles touch
-      // input and the Three.js render loop, making the whole builder appear
-      // frozen. If the worker cannot initialize, fail clearly and leave the
-      // main BlockAR canvas/touch controls running.
       this.mpIntervalMs = MP_INTERVAL_CPU_MS;
-      let startupTimer = 0;
-      try {
-        await Promise.race([
-          this.startMediaPipeWorker(generation),
-          new Promise<never>((_, reject) => {
-            startupTimer = window.setTimeout(
-              () => reject(new Error("Hand tracking worker did not start in 25 seconds. Touch controls remain available; tap Hand Control to retry.")),
-              25000,
-            );
-          }),
-        ]);
-      } catch (workerError) {
-        if (generation !== this.mpGeneration) throw workerError;
-        try { this.handWorker?.terminate(); } catch {}
-        this.handWorker = null;
-        this.workerReady = false;
-        this.workerBusy = false;
-        this.workerRestarting = false;
-        this.session = "camera live · touch controls available";
-        throw workerError;
-      } finally {
-        if (startupTimer) window.clearTimeout(startupTimer);
-      }
+      await this.startMediaPipeWorker(generation);
       this.resetCube();
       return;
     }
 
     const { FilesetResolver, HandLandmarker } = await import("@mediapipe/tasks-vision");
     const init = (async () => {
-      const fileset = await FilesetResolver.forVisionTasks(getWasmUrl());
+      const fileset = await FilesetResolver.forVisionTasks(WASM);
       const opts = (delegate: "GPU" | "CPU") => ({
-        baseOptions: { modelAssetPath: getModelUrl(), delegate },
+        baseOptions: { modelAssetPath: MODEL, delegate },
         runningMode: "LIVE_STREAM" as const,
         numHands: 2,
         minHandDetectionConfidence: 0.5,
@@ -331,16 +326,16 @@ export class HandSystemRuntime {
         minTrackingConfidence: 0.5,
         resultCallback: (res: any) => {
           if (generation !== this.mpGeneration || !this.stream) return;
-          this.consumeMediaPipeResult(res, this.video);
+          this.consumeMediaPipeResult(res);
         },
       });
       try {
         this.mpIntervalMs = MP_INTERVAL_MS;
-        return await HandLandmarker.createFromOptions(fileset, opts("GPU"));
+        return await HandLandmarker.createFromOptions(fileset, opts("GPU") as any);
       } catch {
         this.mpIntervalMs = MP_INTERVAL_CPU_MS;
         this.session = "camera live · CPU delegate · reduced rate";
-        return await HandLandmarker.createFromOptions(fileset, opts("CPU"));
+        return await HandLandmarker.createFromOptions(fileset, opts("CPU") as any);
       }
     })();
     const timeout = new Promise<never>((_, r) => setTimeout(() => r(new Error("MediaPipe model load timed out (20s) — check network")), 20000));
@@ -349,85 +344,170 @@ export class HandSystemRuntime {
   }
 
   private async startMediaPipeWorker(generation: number) {
-    this.handWorker?.terminate();
-    // Classic worker (NOT module): MediaPipe's WASM loader uses importScripts
-    // which sets self.ModuleFactory via global var. In a module worker the
-    // dynamic import() keeps ModuleFactory module-scoped -> "ModuleFactory not set".
-    this.handWorker = new Worker(new URL("./hand-landmarker.worker.ts", import.meta.url));
+    try { this.handWorker?.terminate(); } catch { /* ignore */ }
+    const worker = new Worker(new URL("./hand-landmarker.worker.ts", import.meta.url), { type: "module" });
+    this.handWorker = worker;
     this.workerReady = false;
-    this.workerBusy = false;
-    this.workerRestarting = false;
-    this.lastWorkerSubmitT = 0;
+    this.gate.reset();
 
     const ready = new Promise<void>((resolve, reject) => {
-      const timer = window.setTimeout(() => reject(new Error("MediaPipe worker timed out (80s) — check network")), 80000);
-      const worker = this.handWorker!;
+      const timer = window.setTimeout(() => reject(new Error("MediaPipe worker timed out (20s) — check network")), 20000);
       worker.onmessage = (event: MessageEvent) => {
         const data = event.data ?? {};
-        if (generation !== this.mpGeneration) return;
+        // Ignore anything from a superseded worker or session generation.
+        if (generation !== this.mpGeneration || worker !== this.handWorker) return;
         if (data.type === "READY") {
           window.clearTimeout(timer);
           this.workerReady = true;
-          this.workerBusy = false;
           this.workerRestarting = false;
-          this.session = data.delegate === "CPU" ? "camera live · MediaPipe worker · CPU fallback" : "camera live · MediaPipe worker · GPU";
+          this.workerDelegate = data.delegate === "CPU" ? "CPU" : "GPU";
+          if (this.workerDelegate === "CPU") this.mpIntervalMs = MP_INTERVAL_CPU_MS;
+          this.lastResultT = performance.now();
+          this.session = `${this.sourceLabel()} · MediaPipe worker · ${this.workerDelegate}`;
           resolve();
-        } else if (data.type === "RESULT") {
-          this.workerBusy = false;
-          this.consumeMediaPipeResult(data.result, this.video);
-        } else if (data.type === "RUNTIME_FALLBACK") {
-          this.workerBusy = false;
-          this.mpIntervalMs = MP_INTERVAL_CPU_MS;
-          this.error = null;
-          this.session = "camera live · MediaPipe worker · CPU fallback";
-        } else if (data.type === "DETECT_ERROR") {
-          this.workerBusy = false;
-          this.error = data.error ?? "MediaPipe worker detection failed";
-        } else if (data.type === "ERROR") {
-          window.clearTimeout(timer);
-          reject(new Error(data.error ?? "MediaPipe worker failed"));
-        }
-      };
-      worker.onerror = (event) => {
-        window.clearTimeout(timer);
-        if (generation !== this.mpGeneration) return;
-        const message = event.message || "MediaPipe worker crashed";
-        if (this.workerReady && this.backend === "MEDIAPIPE" && !this.workerRestarting) {
-          if (this.workerRestartCount >= HandSystemRuntime.MAX_WORKER_RESTARTS) {
-            this.workerRestarting = false;
-            this.workerReady = false;
-            this.workerBusy = false;
-            this.error = "MediaPipe worker restart limit exceeded. Touch building remains active.";
-            this.session = "MediaPipe worker stopped · restart limit";
-            this.set("ERROR");
-            return;
-          }
-          this.workerRestartCount++;
-          this.workerRestarting = true;
-          this.workerReady = false;
-          this.workerBusy = false;
-          this.handWorker = null;
-          try { worker.terminate(); } catch { /* already stopped */ }
-          this.session = `RESTARTING · MediaPipe worker (${this.workerRestartCount}/${HandSystemRuntime.MAX_WORKER_RESTARTS})`;
-          this.error = null;
-          void this.startMediaPipeWorker(generation).then(() => {
-            if (generation !== this.mpGeneration || this.backend !== "MEDIAPIPE") return;
-            this.workerRestarting = false;
-            this.session = "camera live · MediaPipe worker · recovered";
-          }).catch((e: unknown) => {
-            if (generation !== this.mpGeneration || this.backend !== "MEDIAPIPE") return;
-            this.workerRestarting = false;
-            this.error = e instanceof Error ? e.message : String(e);
-            this.session = "RESTARTING · MediaPipe worker failed";
-          });
           return;
         }
-        reject(new Error(message));
+        if (data.type === "ERROR") { window.clearTimeout(timer); reject(new Error(data.error ?? "MediaPipe worker failed")); return; }
+        // Frame replies: only the current token may clear the in-flight slot.
+        const current = typeof data.frameId === "number" && this.gate.finish(data.frameId);
+        if (data.type === "RESULT") {
+          if (!current) return; // stale result from a timed-out frame
+          this.lastResultT = performance.now();
+          if (this.workerRestartCount && this.lastResultT - this.lastWorkerRestartT > 30000) this.workerRestartCount = 0;
+          this.consumeMediaPipeResult(data.result);
+        } else if (data.type === "RUNTIME_FALLBACK") {
+          this.workerDelegate = "CPU";
+          this.mpIntervalMs = MP_INTERVAL_CPU_MS;
+          this.error = null;
+          this.session = `${this.sourceLabel()} · MediaPipe worker · CPU fallback`;
+        } else if (data.type === "DETECT_ERROR") {
+          this.error = data.error ?? "MediaPipe worker detection failed";
+        }
+        // DROPPED: slot already freed above; nothing else to do.
+      };
+      worker.onerror = (event) => {
+        event.preventDefault?.();
+        window.clearTimeout(timer);
+        if (generation !== this.mpGeneration || worker !== this.handWorker) return;
+        if (this.workerReady) { this.restartWorker(`crash: ${event.message || "worker crashed"}`); return; }
+        reject(new Error(event.message || "MediaPipe worker crashed"));
       };
     });
 
-    this.handWorker.postMessage({ type: "INIT" });
+    worker.postMessage({ type: "INIT", delegate: this.workerDelegate });
     await ready;
+  }
+
+  private lastWorkerRestartT = 0;
+
+  /** Bounded worker restart. Never blocks the render loop; never leaves a terminal state. */
+  private restartWorker(reason: string) {
+    if (this.backend !== "MEDIAPIPE" || this.workerRestarting) return;
+    const old = this.handWorker;
+    this.handWorker = null;
+    this.workerReady = false;
+    this.gate.reset();
+    try { old?.terminate(); } catch { /* already stopped */ }
+
+    if (this.workerRestartCount >= HandSystemRuntime.MAX_WORKER_RESTARTS) {
+      // Limit reached: pause hand tracking, keep everything else alive, and
+      // schedule a cooled-down recovery on the CPU delegate.
+      this.error = `Hand tracking paused (${reason}). Retrying shortly — touch building remains active.`;
+      this.session = "MediaPipe worker paused · cooling down";
+      this.set("ERROR");
+      this.scheduleRecovery();
+      return;
+    }
+    this.workerRestartCount++;
+    this.lastWorkerRestartT = performance.now();
+    // Restore the last working backend; after any GPU trouble prefer CPU.
+    if (/timeout|crash/i.test(reason) && this.workerRestartCount >= 2) this.workerDelegate = "CPU";
+    this.workerRestarting = true;
+    this.session = `RESTARTING · MediaPipe worker (${this.workerRestartCount}/${HandSystemRuntime.MAX_WORKER_RESTARTS}) · ${reason}`;
+    this.error = null;
+    const generation = this.mpGeneration;
+    void this.startMediaPipeWorker(generation).then(() => {
+      if (generation !== this.mpGeneration || this.backend !== "MEDIAPIPE") return;
+      this.workerRestarting = false;
+      this.session = `${this.sourceLabel()} · MediaPipe worker · recovered`;
+      if (this.system !== "TRACKING") this.set("TRACKING");
+    }).catch((e: unknown) => {
+      if (generation !== this.mpGeneration || this.backend !== "MEDIAPIPE") return;
+      this.workerRestarting = false;
+      this.error = e instanceof Error ? e.message : String(e);
+      this.restartWorker("init failed");
+    });
+  }
+
+  private scheduleRecovery() {
+    if (this.recoveryTimer != null) return;
+    const generation = this.mpGeneration;
+    this.recoveryTimer = window.setTimeout(() => {
+      this.recoveryTimer = null;
+      if (generation !== this.mpGeneration || this.backend !== "MEDIAPIPE") return;
+      this.workerRestartCount = 0;
+      this.workerDelegate = "CPU";
+      this.mpIntervalMs = MP_INTERVAL_CPU_MS;
+      this.set("TRACKING");
+      this.restartWorker("recovery");
+    }, HandSystemRuntime.RECOVERY_COOLDOWN_MS);
+  }
+
+  private sourceLabel() {
+    return this.frameSource === "xr" ? "XR raw camera" : this.frameSource === "video" ? "camera live" : "paused";
+  }
+
+  // ---------- frame ownership ----------
+  /** Switch frame producer. Resets stale timestamps / in-flight frames. */
+  setFrameSource(src: FrameSource, stream?: MediaStream | null) {
+    if (stream !== undefined) this.rebindStream(stream);
+    this.frameSource = src;
+    this.gate.reset();
+    this.lastVideoTime = -1;
+    this.lastVideoAdvanceT = performance.now();
+    this.lastMpDetectT = 0;
+    this.stallReported = false;
+    this.mpFrame = {};
+    if (this.backend === "MEDIAPIPE") this.session = `${this.sourceLabel()} · MediaPipe worker · ${this.workerDelegate}`;
+    this.emit(true);
+  }
+  getFrameSource(): FrameSource { return this.frameSource; }
+
+  /** Attach a (new) DOM camera stream after XR ends or permissions change. */
+  rebindStream(stream: MediaStream | null) {
+    if (this.stream && this.stream !== stream && !this.externalStream) this.stream.getTracks().forEach((t) => t.stop());
+    this.stream = stream;
+    this.externalStream = !!stream;
+    if (stream) {
+      if (this.video.srcObject !== stream) this.video.srcObject = stream;
+      void this.video.play().catch(() => {});
+    }
+  }
+
+  /** True when the hand pipeline is ready to accept another external frame. */
+  wantsExternalFrame(now = performance.now()): boolean {
+    return this.system === "TRACKING" && this.backend === "MEDIAPIPE" && this.frameSource === "xr"
+      && !!this.handWorker && this.workerReady && !this.gate.busy() && now - this.lastMpDetectT >= this.mpIntervalMs;
+  }
+
+  /** Feed one RGBA frame from the XR raw camera. Buffer ownership transfers to the worker. */
+  submitPixels(pixels: Uint8Array, width: number, height: number, now = performance.now()): boolean {
+    if (!this.wantsExternalFrame(now)) return false;
+    const id = this.gate.begin(now);
+    if (id == null) return false;
+    this.lastMpDetectT = now;
+    this.srcW = width; this.srcH = height;
+    this.gate.toWorker(id, now);
+    try {
+      const ts = Math.max(this.lastSentTimestamp + 1, Math.round(now));
+      this.lastSentTimestamp = ts;
+      const buf = pixels.buffer as ArrayBuffer;
+      this.handWorker!.postMessage({ type: "FRAME", frameId: id, pixels: buf, width, height, timestampMs: ts }, [buf]);
+      return true;
+    } catch {
+      this.gate.finish(id);
+      return false;
+    }
   }
 
   private startDemo() {
@@ -456,16 +536,18 @@ export class HandSystemRuntime {
       this.handWorker.terminate();
       this.handWorker = null;
     }
+    if (this.recoveryTimer != null) { window.clearTimeout(this.recoveryTimer); this.recoveryTimer = null; }
     this.workerReady = false;
-    this.workerBusy = false;
+    this.gate.reset();
     this.workerRestarting = false;
     this.workerRestartCount = 0;
+    this.workerDelegate = "GPU";
+    this.frameSource = "video";
+    this.stallReported = false;
     this.mpFrame = {};
     this.lastVideoTime = -1;
     this.lastMpDetectT = 0;
-    this.lastWorkerSubmitT = 0;
     this.lastSentTimestamp = 0;
-    this.workerSubmissionId++;
     this.mpIntervalMs = MP_INTERVAL_MS;
     this.lastHandRenderT = 0;
     this.backend = "NONE";
@@ -525,6 +607,7 @@ export class HandSystemRuntime {
     const samples: Partial<Record<Side, THREE.Vector3[]>> = {};
     if (this.system === "TRACKING") {
       this.checkWorkerWatchdog(now);
+      this.checkVideoStall(now);
       if (this.backend === "WEBXR" && xrFrame) this.sampleXR(xrFrame, samples);
       else if (this.backend === "MEDIAPIPE") this.sampleMediaPipe(now, samples);
       else if (this.backend === "DEMO") this.sampleDemo(samples);
@@ -571,117 +654,86 @@ export class HandSystemRuntime {
 
   private checkWorkerWatchdog(now: number) {
     if (this.backend !== "MEDIAPIPE" || !this.handWorker || this.workerRestarting) return;
-    if (!this.workerBusy || !this.lastWorkerSubmitT) return;
-    if (now - this.lastWorkerSubmitT < HandSystemRuntime.WORKER_INFERENCE_TIMEOUT_MS) return;
+    // A frame stuck in createImageBitmap is simply invalidated (its token dies);
+    // a frame stuck inside the worker means inference hung → restart the worker.
+    const expired = this.gate.expire(now, HandSystemRuntime.BITMAP_TIMEOUT_MS, HandSystemRuntime.WORKER_INFERENCE_TIMEOUT_MS);
+    if (expired === "worker") this.restartWorker("inference timeout");
+  }
 
-    if (this.workerRestartCount >= HandSystemRuntime.MAX_WORKER_RESTARTS) {
-      this.workerBusy = false;
-      this.error = "Hand tracking worker timed out repeatedly. Touch building remains active.";
-      this.session = "MediaPipe worker stopped · timeout limit";
-      this.set("ERROR");
-      return;
-    }
-
-    this.workerRestartCount++;
-    this.workerRestarting = true;
-    this.workerBusy = false;
-    this.workerReady = false;
-    this.session = `RESTARTING · MediaPipe worker watchdog (${this.workerRestartCount}/${HandSystemRuntime.MAX_WORKER_RESTARTS})`;
-    this.error = null;
-    try { this.handWorker.terminate(); } catch { /* already stopped */ }
-    this.handWorker = null;
-
-    const generation = this.mpGeneration;
-    void this.startMediaPipeWorker(generation).then(() => {
-      if (generation !== this.mpGeneration || this.backend !== "MEDIAPIPE") return;
-      this.workerRestarting = false;
-      this.session = "camera live · MediaPipe worker · recovered";
-    }).catch((e: unknown) => {
-      if (generation !== this.mpGeneration || this.backend !== "MEDIAPIPE") return;
-      this.workerRestarting = false;
-      this.error = e instanceof Error ? e.message : String(e);
-      this.session = "RESTARTING · MediaPipe worker failed";
-    });
+  /** Detect a DOM camera stream that stopped producing frames (XR grabbed it, permission revoked, track ended). */
+  private checkVideoStall(now: number) {
+    if (this.backend !== "MEDIAPIPE" || this.frameSource !== "video" || this.stallReported) return;
+    const track = this.stream?.getVideoTracks()[0];
+    const ended = !track || track.readyState === "ended";
+    const stalled = this.lastVideoAdvanceT > 0 && now - this.lastVideoAdvanceT > 2500;
+    if (!ended && !stalled) return;
+    if (!ended && this.video.paused) { void this.video.play().catch(() => {}); this.lastVideoAdvanceT = now; return; }
+    this.stallReported = true;
+    this.mpFrame = {};
+    this.session = ended ? "camera stream ended · waiting for camera" : "camera stalled · waiting for frames";
+    this.onCameraStalled?.(ended ? "ended" : "stalled");
   }
 
   private sampleMediaPipe(now: number, out: Partial<Record<Side, THREE.Vector3[]>>) {
     const lm = this.landmarker, v = this.video;
-    if ((!lm && !this.handWorker) || v.readyState < 2) return;
-
-    if (v.currentTime !== this.lastVideoTime && now - this.lastMpDetectT >= this.mpIntervalMs) {
-      this.lastVideoTime = v.currentTime;
-      this.lastMpDetectT = now;
-
-      if (this.handWorker) {
-        if (!this.workerReady || this.workerBusy) return;
-        this.lastWorkerSubmitT = now;
-        this.workerBusy = true;
-        const submissionId = ++this.workerSubmissionId;
-
-        // Bounded createImageBitmap with a safety abort timeout. The token is
-        // important: createImageBitmap() cannot actually be cancelled, so a
-        // late bitmap must never consume a newer inference slot.
-        let bitmapResolved = false;
-        const bitmapTimeout = window.setTimeout(() => {
-          if (submissionId === this.workerSubmissionId && !bitmapResolved && this.workerBusy) {
-            this.workerBusy = false;
-          }
-        }, 1200);
-
-        createImageBitmap(v, {
-          resizeWidth: 480,
-          resizeHeight: 270,
-          resizeQuality: "low",
-        }).then((bitmap) => {
-          bitmapResolved = true;
-          window.clearTimeout(bitmapTimeout);
-          if (submissionId !== this.workerSubmissionId || !this.handWorker || !this.workerReady) {
-            try { bitmap.close(); } catch {}
-            return;
-          }
-          try {
-            const ts = Math.max(this.lastSentTimestamp + 1, Math.round(now));
-            this.lastSentTimestamp = ts;
-            this.handWorker.postMessage({
-              type: "FRAME",
-              bitmap,
-              timestampMs: ts,
-            }, [bitmap]);
-          } catch {
-            try { bitmap.close(); } catch {}
-            if (submissionId === this.workerSubmissionId) this.workerBusy = false;
-          }
-        }).catch(() => {
-          bitmapResolved = true;
-          window.clearTimeout(bitmapTimeout);
-          if (submissionId === this.workerSubmissionId) this.workerBusy = false;
-        });
-      } else {
-        try {
-          (lm as any).detectAsync(v, now);
-        } catch {
-          // A transient detector error must never stop the AR render loop.
+    if (this.frameSource === "video" && (lm || this.handWorker) && v.readyState >= 2) {
+      const advanced = v.currentTime !== this.lastVideoTime;
+      if (advanced) { this.lastVideoTime = v.currentTime; this.lastVideoAdvanceT = now; if (this.stallReported) { this.stallReported = false; } }
+      // Don't depend exclusively on currentTime advancing (some devices report a
+      // frozen clock); a slow refresh of a repeated frame is harmless.
+      const due = now - this.lastMpDetectT >= (advanced ? this.mpIntervalMs : Math.max(this.mpIntervalMs, 400));
+      if (due) {
+        if (this.handWorker) {
+          if (this.workerReady) this.submitVideoFrame(v, now);
+        } else if (lm) {
+          this.lastMpDetectT = now;
+          this.srcW = v.videoWidth || 640; this.srcH = v.videoHeight || 480;
+          try { (lm as any).detectAsync(v, now); } catch { /* transient detector error must never stop the loop */ }
         }
       }
     }
 
+    const W = window.innerWidth, H = window.innerHeight;
+    const sc = Math.max(W / this.srcW, H / this.srcH);
+    const imgW = this.srcW * sc;
     for (const side of ["left", "right"] as Side[]) {
       const pts = this.mpFrame[side];
       if (!pts) continue;
       const h = this.hands[side];
-      const W = window.innerWidth, H = window.innerHeight;
-      const vw = v.videoWidth || 640, vh = v.videoHeight || 480;
-      const sc = Math.max(W / vw, H / vh);
-      const imgW = vw * sc;
-      const lifted = liftLandmarks(pts, this.camera, W, H, h.depth, imgW, h.pinch.held);
+      const lifted = liftLandmarks(pts, this.camera, W, H, h.depth, imgW);
       h.depth = lifted.depth;
       out[side] = lifted.points;
     }
   }
 
-  private consumeMediaPipeResult(res: any, v: HTMLVideoElement) {
-    const W = window.innerWidth, H = window.innerHeight;
+  /** One-in-flight video submission guarded by a generation token. */
+  private submitVideoFrame(v: HTMLVideoElement, now: number) {
+    const id = this.gate.begin(now);
+    if (id == null) return;
+    this.lastMpDetectT = now;
     const vw = v.videoWidth || 640, vh = v.videoHeight || 480;
+    createImageBitmap(v, { resizeWidth: 480, resizeHeight: 270, resizeQuality: "low" }).then((bitmap) => {
+      // Token dead (timed out, reset, source switched) → discard permanently.
+      const worker = this.handWorker;
+      if (!worker || !this.workerReady || this.frameSource !== "video" || !this.gate.toWorker(id, performance.now())) {
+        try { bitmap.close(); } catch { /* ignore */ }
+        return;
+      }
+      this.srcW = vw; this.srcH = vh;
+      try {
+        const ts = Math.max(this.lastSentTimestamp + 1, Math.round(now));
+        this.lastSentTimestamp = ts;
+        worker.postMessage({ type: "FRAME", frameId: id, bitmap, timestampMs: ts }, [bitmap]);
+      } catch {
+        try { bitmap.close(); } catch { /* ignore */ }
+        this.gate.finish(id);
+      }
+    }).catch(() => { this.gate.finish(id); });
+  }
+
+  private consumeMediaPipeResult(res: any) {
+    const W = window.innerWidth, H = window.innerHeight;
+    const vw = this.srcW, vh = this.srcH;
     const sc = Math.max(W / vw, H / vh);
     const ox = (vw * sc - W) / 2, oy = (vh * sc - H) / 2;
     const mirrored = !this.isRearCamera();
@@ -704,6 +756,7 @@ export class HandSystemRuntime {
   }
 
   private isRearCamera(): boolean {
+    if (this.frameSource === "xr") return true;
     const t = this.stream?.getVideoTracks()[0];
     const fm = t?.getSettings().facingMode;
     return fm ? fm === "environment" : false;
@@ -752,14 +805,8 @@ export class HandSystemRuntime {
 
     const palm = pts[0]!.distanceTo(pts[9]!) || 1e-3;
     h.ratio = pts[4]!.distanceTo(pts[8]!) / palm;
-    // EMA smoothing (alpha=0.4): reduces landmark jitter flicker that causes
-    // false pinch release/trigger on lighting/distance changes.
-    const EMA_ALPHA = 0.4;
-    h.smoothRatio = h.smoothRatio === 1 && h.ratio !== 1
-      ? h.ratio  // first real measurement: snap
-      : EMA_ALPHA * h.ratio + (1 - EMA_ALPHA) * h.smoothRatio;
     const prev = h.pinch.phase;
-    const phase = h.pinch.update(h.smoothRatio);
+    const phase = h.pinch.update(h.ratio);
 
     if (phase === "PINCHED" && prev === "PINCHING") {
       if (!this.owner && this.isNearCube(h, cam)) {
@@ -826,7 +873,7 @@ export class HandSystemRuntime {
     const now = performance.now();
     if (!force && now - this.lastEmit < 100) return;
     this.lastEmit = now;
-    const info = (h: HandState): HandInfo => ({ status: h.status, pinch: h.pinch.phase, ratio: h.ratio, smoothRatio: h.smoothRatio, grabbing: this.owner === h.side });
+    const info = (h: HandState): HandInfo => ({ status: h.status, pinch: h.pinch.phase, ratio: h.ratio, grabbing: this.owner === h.side });
     const labels: HandDiagnostics["labels"] = [];
     if (!this.renderer.xr.isPresenting) {
       for (const h of Object.values(this.hands)) {
