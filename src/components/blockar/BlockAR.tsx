@@ -452,6 +452,9 @@ export function BlockAR() {
         if (!autoExitingXR.current && engine.current?.isXR()) setToast("AR on — choose a surface, then pinch to build");
       } catch (err) {
         setToast((err as Error).message || "AR could not start");
+        // FIX: Clear xrStarting BEFORE restore, otherwise the guard
+        // `if (xrStarting.current) return` in restoreVideoPipeline skips xr-failed silently.
+        xrStarting.current = false;
         if (handRuntime.current) void restoreVideoPipeline("xr-failed");
       }
     } finally {
