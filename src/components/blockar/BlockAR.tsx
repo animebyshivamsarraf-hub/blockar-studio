@@ -164,6 +164,7 @@ export function BlockAR() {
     const scheduleRestore = (track: MediaStreamTrack, reason: string) => {
       if (document.hidden) return; // visibilitychange handler will handle
       if (camState.current.xr) return; // XR owns camera
+      if (xrStarting.current) return; // AR starting — don't open duplicate getUserMedia
       if (trackRestoreTimer.current) clearTimeout(trackRestoreTimer.current);
       trackRestoreTimer.current = window.setTimeout(() => {
         trackRestoreTimer.current = null;
@@ -171,6 +172,7 @@ export function BlockAR() {
         // Old track's timer must not trigger restore after stream changed.
         const currentTrack = streamRef.current?.getVideoTracks()[0];
         if (currentTrack !== track) return;
+        if (xrStarting.current) return; // AR started during debounce
         // Re-verify: track still bad, no XR, hands wanted, document visible
         const stillBad = track.readyState === "ended" || track.muted;
         if (stillBad && !camState.current.xr && camState.current.handsWanted && !document.hidden) {
@@ -256,6 +258,8 @@ export function BlockAR() {
   const restoreQueued = useRef<string | null>(null);
   /** Bumped whenever camera ownership moves away from the DOM camera; in-flight restores abort. */
   const camEpoch = useRef(0);
+  /** True while AR session is starting (both attempts). Blocks restoreVideoPipeline to avoid duplicate getUserMedia. */
+  const xrStarting = useRef(false);
   const autoExitingXR = useRef(false);
   const rawWatchdog = useRef(new RawFrameWatchdog(2500));
   const rawStalls = useRef(0);
@@ -267,6 +271,7 @@ export function BlockAR() {
   async function restoreVideoPipeline(reason: string) {
     const rt = handRuntime.current;
     if (!rt || camState.current.xr) return;
+    if (xrStarting.current) return; // AR starting — don't open duplicate getUserMedia
     if (recoveringCamera.current) { restoreQueued.current = reason; return; }
     recoveringCamera.current = true;
     const epoch = camEpoch.current;
@@ -310,7 +315,10 @@ export function BlockAR() {
       recoveringCamera.current = false;
       const q = restoreQueued.current;
       restoreQueued.current = null;
-      if (q && handRuntime.current && !camState.current.xr && camState.current.handsWanted) void restoreVideoPipeline(q);
+      // FIX: Normalize queued reason to "restore" (except special "xr-failed").
+      // Prevents a stale "stalled" from closing a good running stream after first restore.
+      const nextReason = q === "xr-failed" ? q : "restore";
+      if (q && handRuntime.current && !camState.current.xr && camState.current.handsWanted) void restoreVideoPipeline(nextReason);
     }
   }
 
@@ -430,6 +438,7 @@ export function BlockAR() {
 
   async function enterXR() {
     if (!engine.current || !overlayRef.current) return;
+    xrStarting.current = true;
     try {
       await engine.current.startXR(overlayRef.current);
       if (!autoExitingXR.current && engine.current?.isXR()) setToast("AR on — choose a surface, then pinch to build");
@@ -445,6 +454,8 @@ export function BlockAR() {
         setToast((err as Error).message || "AR could not start");
         if (handRuntime.current) void restoreVideoPipeline("xr-failed");
       }
+    } finally {
+      xrStarting.current = false;
     }
   }
   const toggleHandsRef = useRef<(() => Promise<void>) | null>(null);
