@@ -1,7 +1,7 @@
 export const MAX_WORKER_RESTARTS = 3;
 export const WORKER_INFERENCE_TIMEOUT_MS = 3500;
-export const MP_INTERVAL_MS = 1000 / 15;
-export const MP_INTERVAL_CPU_MS = 1000 / 10;
+export const MP_INTERVAL_MS = 1000 / 20;
+export const MP_INTERVAL_CPU_MS = 1000 / 12;
 
 /**
  * Ensures frame timestamps passed to MediaPipe detectForVideo are strictly

@@ -72,10 +72,10 @@
     }
     .diag-val { color: #fff; font-weight: bold; }
   </style>
-  <!-- Three.js from unpkg/CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-  <!-- MediaPipe Tasks Vision for Camera mode -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/wasm/vision_bundle.js"></script>
+  <!-- Three.js ES module via importmap -->
+  <script type="importmap">
+  {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}
+  </script>
 </head>
 <body>
   <video id="video-feed" playsinline muted></video>
@@ -109,6 +109,6 @@
     <button id="btn-reset" class="btn">🔄 Reset</button>
   </div>
 
-  <script src="standalone_hand.js"></script>
+  <script type="module" src="standalone_hand.js"></script>
 </body>
 </html>

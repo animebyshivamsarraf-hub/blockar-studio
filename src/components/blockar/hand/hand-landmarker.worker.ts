@@ -51,6 +51,9 @@ const init = async (
   g: number,
   preferred: "GPU" | "CPU",
 ) => {
+  // NOTE: If withTimeout wins the race, the pending makeLandmarker may later
+  // resolve and leak its instance. Bounded in practice: worker termination
+  // destroys the JS context and reclaims GPU resources.
   const fileset = await withTimeout(getFileset(), 20000, "MediaPipe WASM download");
   let task: HandLandmarker;
   let delegate = preferred;
