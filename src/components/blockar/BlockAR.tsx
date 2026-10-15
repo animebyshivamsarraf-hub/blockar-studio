@@ -694,6 +694,10 @@ export function BlockAR() {
   return (
     <main ref={overlayRef} className="fixed inset-0 overflow-hidden bg-background text-foreground select-none">
       <video ref={videoRef} playsInline muted className={cn("absolute inset-0 h-full w-full object-cover", !camOk && "invisible")} />
+      {/* Build stamp: bottom-left corner, shows deployed commit + build time */}
+      <div className="pointer-events-none absolute bottom-1 left-2 z-50 text-[10px] font-mono text-muted-foreground/60">
+        {typeof __BUILD_STAMP__ !== "undefined" ? __BUILD_STAMP__ : ""}
+      </div>
       {!camOk && <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_70%,var(--glow),transparent_65%)]" />}
       {stage === "build" && <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />}
       <canvas ref={handCanvas} className="pointer-events-none absolute inset-0 h-full w-full" />

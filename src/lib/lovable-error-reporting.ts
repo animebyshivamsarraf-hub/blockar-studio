@@ -14,6 +14,7 @@ type LovableEvents = {
 };
 
 declare global {
+  const __BUILD_STAMP__: string | undefined;
   interface Window {
     __lovableEvents?: LovableEvents;
     __lovableReportRuntimeError?: (payload: {
