@@ -167,6 +167,10 @@ export function BlockAR() {
       if (trackRestoreTimer.current) clearTimeout(trackRestoreTimer.current);
       trackRestoreTimer.current = window.setTimeout(() => {
         trackRestoreTimer.current = null;
+        // FIX: Only restore if this track is STILL the current video track.
+        // Old track's timer must not trigger restore after stream changed.
+        const currentTrack = streamRef.current?.getVideoTracks()[0];
+        if (currentTrack !== track) return;
         // Re-verify: track still bad, no XR, hands wanted, document visible
         const stillBad = track.readyState === "ended" || track.muted;
         if (stillBad && !camState.current.xr && camState.current.handsWanted && !document.hidden) {
@@ -191,6 +195,16 @@ export function BlockAR() {
       trackListenersRef.current.set(track, { onended, onmute, onunmute });
     });
   }
+
+  // FIX: Clear pending track-restore timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (trackRestoreTimer.current) {
+        clearTimeout(trackRestoreTimer.current);
+        trackRestoreTimer.current = null;
+      }
+    };
+  }, []);
 
   // FIX 1: visibilitychange — pause hand tracking when tab hidden, restore when visible.
   // XR active → do nothing (XR session owns the camera).
