@@ -141,31 +141,54 @@ export function BlockAR() {
     }
   }, [stage, camOk]);
 
-  // FIX 2: Track ended/mute listeners — trigger immediate recovery, don't wait for 2.5s polling.
+  // FIX 2: Track ended/mute listeners — 700ms debounce, re-verify before restore.
+  // - document.hidden → return (visibilitychange handler sambhalega)
+  // - camState.xr → return (XR owns camera, no duplicate getUserMedia)
+  // - unmute → pending timer cancel
   // Old listeners are removed when stream changes to avoid duplicates.
-  const trackListenersRef = useRef<Map<MediaStreamTrack, { onended: () => void; onmute: () => void }>>(new Map());
+  const trackListenersRef = useRef<Map<MediaStreamTrack, { onended: () => void; onmute: () => void; onunmute: () => void }>>(new Map());
+  const trackRestoreTimer = useRef<number | null>(null);
   function attachTrackListeners(s: MediaStream) {
     // Remove old listeners first
     trackListenersRef.current.forEach((handlers, track) => {
       track.removeEventListener("ended", handlers.onended);
       track.removeEventListener("mute", handlers.onmute);
+      track.removeEventListener("unmute", handlers.onunmute);
     });
     trackListenersRef.current.clear();
+    if (trackRestoreTimer.current) {
+      clearTimeout(trackRestoreTimer.current);
+      trackRestoreTimer.current = null;
+    }
+    // Debounced restore: re-verify all conditions after 700ms
+    const scheduleRestore = (track: MediaStreamTrack, reason: string) => {
+      if (document.hidden) return; // visibilitychange handler will handle
+      if (camState.current.xr) return; // XR owns camera
+      if (trackRestoreTimer.current) clearTimeout(trackRestoreTimer.current);
+      trackRestoreTimer.current = window.setTimeout(() => {
+        trackRestoreTimer.current = null;
+        // Re-verify: track still bad, no XR, hands wanted, document visible
+        const stillBad = track.readyState === "ended" || track.muted;
+        if (stillBad && !camState.current.xr && camState.current.handsWanted && !document.hidden) {
+          void restoreVideoPipeline(reason);
+        }
+      }, 700);
+    };
     // Attach to new stream's video tracks
     s.getVideoTracks().forEach((track) => {
-      const onended = () => {
-        if (!camState.current.xr && camState.current.handsWanted) {
-          void restoreVideoPipeline("track-ended");
-        }
-      };
-      const onmute = () => {
-        if (!camState.current.xr && camState.current.handsWanted) {
-          void restoreVideoPipeline("track-muted");
+      const onended = () => scheduleRestore(track, "track-ended");
+      const onmute = () => scheduleRestore(track, "track-muted");
+      const onunmute = () => {
+        // Track recovered on its own — cancel pending restore
+        if (trackRestoreTimer.current) {
+          clearTimeout(trackRestoreTimer.current);
+          trackRestoreTimer.current = null;
         }
       };
       track.addEventListener("ended", onended);
       track.addEventListener("mute", onmute);
-      trackListenersRef.current.set(track, { onended, onmute });
+      track.addEventListener("unmute", onunmute);
+      trackListenersRef.current.set(track, { onended, onmute, onunmute });
     });
   }
 
@@ -173,12 +196,14 @@ export function BlockAR() {
   // XR active → do nothing (XR session owns the camera).
   useEffect(() => {
     const onVis = () => {
+      // FIX: XR active ho to kuch mat karo — na pause, na restore.
+      if (camState.current.xr) return;
       if (document.hidden) {
         // Tab hidden: pause hand tracking to stop frame processing
         handRuntime.current?.setFrameSource("none");
       } else {
         // Tab visible: restore camera pipeline if hands wanted and XR not active
-        if (camState.current.handsWanted && !camState.current.xr) {
+        if (camState.current.handsWanted) {
           void restoreVideoPipeline("restore");
         }
       }
@@ -356,6 +381,7 @@ export function BlockAR() {
       }
       streamRef.current = s;
       setCamOk(true);
+      attachTrackListeners(s);
       if (videoRef.current) {
         videoRef.current.srcObject = s;
         await videoRef.current.play().catch(() => {});
