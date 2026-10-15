@@ -223,9 +223,16 @@ export class HandSystemRuntime {
     try {
       let chosen = mode;
       if (mode === "auto") chosen = (await HandSystemRuntime.webxrSupported()) ? "webxr" : "mediapipe";
-      if (chosen === "webxr") await this.startWebXR();
-      else if (chosen === "mediapipe") await this.startMediaPipe(opts.stream, opts.frameSource ?? "video");
-      else this.startDemo();
+      // 45s overall startup timeout: never leave the UI stuck at STARTING.
+      const startup = (async () => {
+        if (chosen === "webxr") await this.startWebXR();
+        else if (chosen === "mediapipe") await this.startMediaPipe(opts.stream, opts.frameSource ?? "video");
+        else this.startDemo();
+      })();
+      await Promise.race([
+        startup,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Hand tracking startup timed out (45s)")), 45000)),
+      ]);
       this.set("TRACKING");
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -304,13 +311,20 @@ export class HandSystemRuntime {
       throw new Error("Rear camera required — the opened camera is not the environment camera. BlockAR never uses the front camera.");
     }
     this.stream = s;
-    // FIX: Don't reassign srcObject or restart playback if video already shows this stream.
-    // On Android, re-setting the same stream can freeze the video element.
+    // Don't reassign srcObject if it's already the same stream (avoids Android freeze),
+    // but ALWAYS ensure playback is running — Android can report paused=false
+    // while the video element is not actually rendering frames.
     if (this.video.srcObject !== s) {
       this.video.srcObject = s;
     }
-    if (this.video.paused) {
-      await this.video.play().catch(() => {});
+    // Race play() against a timeout so a hung play() can't stall startup forever.
+    try {
+      await Promise.race([
+        this.video.play(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("video.play() timed out")), 5000)),
+      ]);
+    } catch {
+      // play() failed or timed out — continue anyway; the watchdog will catch a stalled video
     }
     this.session = "camera live";
     this.set("INITIALIZING");
