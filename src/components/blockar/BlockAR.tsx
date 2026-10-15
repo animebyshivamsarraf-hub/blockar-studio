@@ -1,6 +1,8 @@
 import { detectDeviceCapabilities, deviceTelemetry, type CapabilityReport } from "./device/CapabilityDetector";
 import { FALLBACK_LIMITATION } from "./hand/MediaPipeFallbackAdapter";
 import { useEffect, useRef, useState } from "react";
+import { DiagnosticsOverlay, diagnosticsStore } from "./DiagnosticsOverlay";
+import { cameraReducer, initialCameraState, frameSourceFor, type CameraState } from "./camera/CameraOwnership";
 import { Box, Camera, Check, Circle, Cylinder, Hand, Move, Paintbrush, Redo2, Save, FolderOpen, Trash2, Triangle, Undo2, Group, ScanLine, Pointer } from "lucide-react";
 import { COLORS, createEngine, type Engine, type Mode, type Shape } from "./engine";
 import { cn } from "@/lib/utils";
@@ -73,6 +75,9 @@ export function BlockAR() {
   const [handStatus, setHandStatus] = useState<"tracking" | "pinching" | "grabbing" | "lost" | "frozen" | "reacquiring" | "error">("lost");
   const [capability, setCapability] = useState<CapabilityReport | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
+  const [cameraState, setCameraState] = useState<CameraState>(initialCameraState);
+  const cameraStateRef = useRef(cameraState);
+  cameraStateRef.current = cameraState;
   const lastStatusUpdate = useRef<number>(0);
   const pendingStatus = useRef<string | null>(null);
 
@@ -126,6 +131,18 @@ export function BlockAR() {
         // XR session ended and camera lock released (150ms elapsed in engine).
         // Clear any stuck hand error state so MediaPipe can restart cleanly.
         setHandError(null);
+        setCameraState((s) => cameraReducer(s, { type: "XR_ENDED" }));
+        // FIX: Reopen rear camera stream after XR releases the camera.
+        // Without this, the video stays frozen on the last XR frame.
+        if (cameraStateRef.current.handsWanted) {
+          // allowCamera is defined below; use setTimeout to avoid TDZ issues
+          setTimeout(() => {
+            allowCameraRef.current?.().catch((e: unknown) => {
+              diagnosticsStore.setError("XR end: camera reopen failed: " + (e instanceof Error ? e.message : String(e)));
+              setToast("Camera reopen failed — tap Retry camera");
+            });
+          }, 200);
+        }
         setHand((prev) => {
           if (prev === "error") {
             setToast("AR exited — tap Hand Control to restart hand tracking");
@@ -149,8 +166,78 @@ export function BlockAR() {
   useEffect(() => { setHint(null); }, [mode]);
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 1800); return () => clearTimeout(t); }, [toast]);
 
-  async function allowCamera(): Promise<MediaStream | null> {
-    setCamErr(null);
+  // Diagnostics: update store with live camera/video state every 500ms
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const v = videoRef.current;
+      const track = streamRef.current?.getVideoTracks()[0];
+      diagnosticsStore.update({
+        cameraOwner: cameraState.owner,
+        frameSource: frameSourceFor(cameraState),
+        videoReadyState: v?.readyState ?? 0,
+        videoCurrentTime: v?.currentTime ?? 0,
+        trackReadyState: track?.readyState ?? "none",
+        trackMuted: track?.muted ?? false,
+        xrActive: cameraState.xr,
+      });
+    }, 500);
+    return () => clearInterval(iv);
+  }, [cameraState]);
+
+  // FIX: Handle tab background/screen lock — close camera when hidden, reopen when visible.
+  // Without this, the stream dies silently and the app freezes on return.
+  useEffect(() => {
+    const onVis = () => {
+      if (document.hidden) {
+        // Tab hidden: stop camera to release it cleanly
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((t) => t.stop());
+        }
+        setCameraState((s) => cameraReducer(s, { type: "CAMERA_LOST" }));
+        diagnosticsStore.update({ lastError: "Tab hidden — camera released" });
+      } else {
+        // Tab visible again: reopen fresh stream if hands were wanted
+        if (cameraStateRef.current.handsWanted && stage === "build") {
+          setTimeout(() => {
+            allowCameraRef.current?.().then((s) => {
+              if (s) {
+                setCameraState((prev) => cameraReducer(prev, { type: "CAMERA_RESTORED" }));
+                handRuntime.current?.rebindStream(s);
+                setToast("Camera restored");
+              }
+            }).catch(() => {
+              setToast("Camera restore failed — tap Retry camera");
+            });
+          }, 300);
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [stage]);
+
+  function stopCamera(reason = "Camera stopped") {
+    // Stop hand tracking first to avoid it holding camera references.
+    stopHands.current?.();
+    stopHands.current = null;
+    setHand("off");
+    setHandSeen(false);
+    setHandError(null);
+    clearHandCanvas();
+    setCameraState((s) => cameraReducer(s, { type: "CAMERA_LOST" }));
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setCamOk(false);
+    setToast(reason);
+  }
+
+  const allowCameraRef = useRef<(() => Promise<MediaStream | null>) | null>(null);
+  useEffect(() => { allowCameraRef.current = allowCamera; });
+
+  async function allowCamera(): Promise<MediaStream | null> {    setCamErr(null);
     try {
       let s: MediaStream;
       try {
@@ -179,6 +266,16 @@ export function BlockAR() {
       }
       streamRef.current = s;
       setCamOk(true);
+      setCameraState((prev) => cameraReducer(prev, { type: "CAMERA_RESTORED" }));
+      // FIX: Listen for track "ended" (permission revoked, device disconnected).
+      // Previously this was only detected via 2.5s polling — now we react immediately.
+      s.getVideoTracks().forEach((track) => {
+        track.onended = () => {
+          diagnosticsStore.setError("Camera track ended — attempting recovery");
+          setCameraState((prev) => cameraReducer(prev, { type: "CAMERA_LOST" }));
+          handRuntime.current?.onCameraStalled?.("ended");
+        };
+      });
       if (videoRef.current) {
         videoRef.current.srcObject = s;
         await videoRef.current.play().catch(() => {});
@@ -272,6 +369,7 @@ export function BlockAR() {
       setHandSeen(false);
       setHandError(null);
       clearHandCanvas();
+      setCameraState((s) => cameraReducer(s, { type: "HANDS_OFF" }));
       if (engine.current?.isXR()) {
         engine.current.setHandTrackingEnabled(false);
       }
@@ -282,6 +380,7 @@ export function BlockAR() {
 
     setHand("starting");
     setHandError(null);
+    setCameraState((s) => cameraReducer(s, { type: "HANDS_ON" }));
     const e0 = engine.current;
 
     // Primary: WebXR — only when the session really exposes native hand joints (headsets).
@@ -353,6 +452,38 @@ export function BlockAR() {
       rt.onOwnerLost = () => {
         engine.current?.handLost();
         setPinch(false);
+      };
+      // FIX: Handle camera stall/ended with fresh stream reopen (max 3 retries).
+      // Previously onCameraStalled was null → silent freeze.
+      let stallRetries = 0;
+      rt.onCameraStalled = (reason: string) => {
+        diagnosticsStore.setError(`Camera ${reason} — attempting recovery (${stallRetries + 1}/3)`);
+        setCameraState((s) => cameraReducer(s, { type: "CAMERA_LOST" }));
+        if (stallRetries >= 3) {
+          setToast("Camera failed 3 times — tap Retry camera");
+          diagnosticsStore.setError("Camera stall: 3 retries exhausted. Manual retry needed.");
+          return;
+        }
+        stallRetries++;
+        // Stop dead stream, open fresh one
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((t) => t.stop());
+          streamRef.current = null;
+        }
+        if (videoRef.current) videoRef.current.srcObject = null;
+        setTimeout(() => {
+          allowCameraRef.current?.().then((s) => {
+            if (s) {
+              setCameraState((prev) => cameraReducer(prev, { type: "CAMERA_RESTORED" }));
+              // Rebind the new stream to the hand runtime
+              rt.rebindStream(s);
+              diagnosticsStore.update({ lastError: null });
+              setToast("Camera recovered");
+            }
+          }).catch((e: unknown) => {
+            diagnosticsStore.setError("Stall recovery failed: " + (e instanceof Error ? e.message : String(e)));
+          });
+        }, 500);
       };
       handRuntime.current = rt;
       stopHands.current = () => { rt.dispose(); handRuntime.current = null; setHandLabels([]); engine.current?.handLost(); };
@@ -504,6 +635,7 @@ export function BlockAR() {
   return (
     <main ref={overlayRef} className="fixed inset-0 overflow-hidden bg-background text-foreground select-none">
       {camOk && <video ref={videoRef} playsInline muted className="absolute inset-0 h-full w-full object-cover" />}
+      <DiagnosticsOverlay />
       {!camOk && <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_70%,var(--glow),transparent_65%)]" />}
       {stage === "build" && <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />}
       <canvas ref={handCanvas} className="pointer-events-none absolute inset-0 h-full w-full" />
@@ -589,6 +721,9 @@ export function BlockAR() {
                 <span>{camOk ? "Back camera" : "Camera off"}</span>
                 <span className={cn("h-2 w-2 rounded-full", camOk ? "bg-success" : "bg-muted-foreground")} />
               </div>
+              {camOk && (
+                <button onClick={() => stopCamera()} className="pointer-events-auto rounded-xl bg-destructive px-3 py-2 text-xs font-semibold text-destructive-foreground">Stop Camera</button>
+              )}
               {xrOk && !engine.current?.isXR() && (
                 <button onClick={enterXR} className="pointer-events-auto rounded-xl bg-success px-3 py-2 text-xs font-semibold text-background">Start WebXR AR</button>
               )}
