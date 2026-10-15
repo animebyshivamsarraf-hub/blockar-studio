@@ -72,6 +72,8 @@ const CUBE_SIZE = 0.08;
 const MP_INTERVAL_MS = 1000 / 15;
 const MP_INTERVAL_CPU_MS = 1000 / 10;
 const HAND_RENDER_INTERVAL_MS = 1000 / 30;
+// FIX: Phone detection shared by field initializer and reset — phones start with CPU.
+const DEFAULT_DELEGATE: "GPU" | "CPU" = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) ? "CPU" : "GPU";
 const HAND_COLORS: Record<Side, number> = { left: 0x7fb8ff, right: 0x4de8ff };
 
 interface HandState {
@@ -117,8 +119,8 @@ export class HandSystemRuntime {
   private workerRestarting = false;
   private workerRestartCount = 0;
   // FIX 3: Phones (Android/iPhone/Mobile) start with CPU — GPU delegate hangs on mobile.
-  // Desktop keeps GPU for performance.
-  private workerDelegate: "GPU" | "CPU" = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) ? "CPU" : "GPU";
+  // Desktop keeps GPU for performance. Uses DEFAULT_DELEGATE so reset() stays consistent.
+  private workerDelegate: "GPU" | "CPU" = DEFAULT_DELEGATE;
   private lastResultT = 0;
   private recoveryTimer: number | null = null;
   private static readonly MAX_WORKER_RESTARTS = MAX_WORKER_RESTARTS;
@@ -542,7 +544,7 @@ export class HandSystemRuntime {
     this.gate.reset();
     this.workerRestarting = false;
     this.workerRestartCount = 0;
-    this.workerDelegate = "GPU";
+    this.workerDelegate = DEFAULT_DELEGATE;
     this.frameSource = "video";
     this.stallReported = false;
     this.mpFrame = {};
