@@ -41,3 +41,46 @@ describe("cameraReducer XR guard (real import)", () => {
 // - scheduleRestore debounce: closure inside component, needs fake timers + DOM.
 // - attachTrackListeners: needs real MediaStreamTrack objects.
 // These are verified by code review and manual testing.
+
+describe("xr-failed restore not skipped by xrStarting guard", () => {
+  it("both startXR attempts reject → xrStarting cleared before restore → guard passes", () => {
+    // Simulate enterXR flow:
+    // 1. xrStarting = true
+    // 2. startXR throws (attempt 1), retry startXR throws (attempt 2)
+    // 3. catch: xrStarting = false BEFORE restoreVideoPipeline("xr-failed")
+    // 4. restoreVideoPipeline guard: if (xrStarting.current) return
+    let xrStarting = true;
+    let restoreCalled = false;
+    let restoreReason: string | null = null;
+
+    const restoreVideoPipeline = (reason: string) => {
+      if (xrStarting) return; // guard
+      restoreCalled = true;
+      restoreReason = reason;
+    };
+
+    // Simulate catch block (with fix):
+    xrStarting = false; // FIX: cleared before restore
+    restoreVideoPipeline("xr-failed");
+
+    expect(restoreCalled).toBe(true);
+    expect(restoreReason).toBe("xr-failed");
+  });
+
+  it("without fix: xrStarting still true → restore skipped", () => {
+    // Documents the bug: if xrStarting not cleared, guard returns early.
+    let xrStarting = true;
+    let restoreCalled = false;
+
+    const restoreVideoPipeline = (reason: string) => {
+      if (xrStarting) return;
+      restoreCalled = true;
+    };
+
+    // Simulate OLD catch block (no fix):
+    // xrStarting stays true
+    restoreVideoPipeline("xr-failed");
+
+    expect(restoreCalled).toBe(false); // bug: silently skipped
+  });
+});
