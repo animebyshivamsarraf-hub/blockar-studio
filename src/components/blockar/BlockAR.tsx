@@ -1,14 +1,15 @@
 import { detectDeviceCapabilities, deviceTelemetry, type CapabilityReport } from "./device/CapabilityDetector";
 import { FALLBACK_LIMITATION } from "./hand/MediaPipeFallbackAdapter";
 import { useEffect, useRef, useState } from "react";
-import { DiagnosticsOverlay, diagnosticsStore } from "./DiagnosticsOverlay";
-import { cameraReducer, initialCameraState, frameSourceFor, type CameraState } from "./camera/CameraOwnership";
 import { Box, Camera, Check, Circle, Cylinder, Hand, Move, Paintbrush, Redo2, Save, FolderOpen, Trash2, Triangle, Undo2, Group, ScanLine, Pointer } from "lucide-react";
 import { COLORS, createEngine, type Engine, type Mode, type Shape } from "./engine";
 import { cn } from "@/lib/utils";
 import { HandSystemRuntime, isEnvironmentStream } from "./hand/HandSystemRuntime";
 import { aiBuild } from "@/lib/ai-build.functions";
-import { rodinDownload, rodinGenerate, rodinStatus } from "@/lib/rodin.functions";
+import { cameraReducer, frameSourceFor, handsPausedByXR, initialCameraState, needsFreshStream, xrHandoffAction, type CameraEvent, type CameraState } from "./camera/CameraOwnership";
+import { RawFrameWatchdog } from "./camera/RawFrameWatchdog";
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 import { Sparkles, Loader2, X, Spline, Play, Square, ArrowUp, ArrowDown, Repeat, Eye, Wand2 } from "lucide-react";
 
 type Stage = "welcome" | "permission" | "scanning" | "build";
@@ -21,12 +22,12 @@ const SHAPES: { id: Shape; label: string; Icon: typeof Box }[] = [
   { id: "pyramid", label: "Pyramid", Icon: Triangle },
 ];
 const MODES: { id: Mode; label: string; Icon: typeof Box; hint: string }[] = [
-  { id: "build", label: "Build", Icon: Box, hint: "Tap to place · drag to extrude a line or wall" },
+  { id: "build", label: "Build", Icon: Box, hint: "Tap to place · drag or PINCH + MOVE to build a line or wall" },
   { id: "move", label: "Move", Icon: Move, hint: "Drag a block to move it · drag empty space to orbit" },
   { id: "delete", label: "Delete", Icon: Trash2, hint: "Tap or swipe across blocks to delete" },
   { id: "paint", label: "Paint", Icon: Paintbrush, hint: "Tap or swipe blocks to repaint with selected color" },
   { id: "group", label: "Group", Icon: Group, hint: "Drag a structure to move all connected blocks" },
-  { id: "track", label: "Track", Icon: Spline, hint: "Pinch + move to draw coaster track · release to finish" },
+  { id: "track", label: "Track", Icon: Spline, hint: "PINCH + MOVE to draw track · RELEASE to finish · or tap spots" },
 ];
 const DEMO = [
   { x: -6, y: 0, z: 4 }, { x: -2, y: 0, z: 5 }, { x: 3, y: 2, z: 5 }, { x: 6, y: 7, z: 3 }, { x: 7, y: 8, z: -1 },
@@ -63,10 +64,6 @@ export function BlockAR() {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiText, setAiText] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
-  const [rodinOpen, setRodinOpen] = useState(false);
-  const [rodinPrompt, setRodinPrompt] = useState("");
-  const [rodinBusy, setRodinBusy] = useState(false);
-  const [rodinStatusText, setRodinStatusText] = useState<string | null>(null);
   const [trackN, setTrackN] = useState(0);
   const [loop, setLoop] = useState(false);
   const [riding, setRiding] = useState(false);
@@ -75,9 +72,9 @@ export function BlockAR() {
   const [handStatus, setHandStatus] = useState<"tracking" | "pinching" | "grabbing" | "lost" | "frozen" | "reacquiring" | "error">("lost");
   const [capability, setCapability] = useState<CapabilityReport | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
-  const [cameraState, setCameraState] = useState<CameraState>(initialCameraState);
-  const cameraStateRef = useRef(cameraState);
-  cameraStateRef.current = cameraState;
+  const [camOwner, setCamOwner] = useState<CameraState>(initialCameraState);
+  const camState = useRef<CameraState>(initialCameraState);
+  const [rawPending, setRawPending] = useState(false);
   const lastStatusUpdate = useRef<number>(0);
   const pendingStatus = useRef<string | null>(null);
 
@@ -127,29 +124,10 @@ export function BlockAR() {
       onChange: setInfo,
       onHint: setHint,
       onHandStatus: (status) => setDebouncedHandStatus(status),
-      onXREnd: () => {
-        // XR session ended and camera lock released (150ms elapsed in engine).
-        // Clear any stuck hand error state so MediaPipe can restart cleanly.
-        setHandError(null);
-        setCameraState((s) => cameraReducer(s, { type: "XR_ENDED" }));
-        // FIX: Reopen rear camera stream after XR releases the camera.
-        // Without this, the video stays frozen on the last XR frame.
-        if (cameraStateRef.current.handsWanted) {
-          // allowCamera is defined below; use setTimeout to avoid TDZ issues
-          setTimeout(() => {
-            allowCameraRef.current?.().catch((e: unknown) => {
-              diagnosticsStore.setError("XR end: camera reopen failed: " + (e instanceof Error ? e.message : String(e)));
-              setToast("Camera reopen failed — tap Retry camera");
-            });
-          }, 200);
-        }
-        setHand((prev) => {
-          if (prev === "error") {
-            setToast("AR exited — tap Hand Control to restart hand tracking");
-            return "off";
-          }
-          return prev;
-        });
+      onXRStateChange: ({ active, rawCamera, pending }) => {
+        // While raw-camera support is still being probed, hands read nothing (never stale video).
+        setRawPending(!!pending);
+        dispatchCamera(active ? { type: "XR_STARTED", rawCamera } : { type: "XR_ENDED" }, !!pending);
       },
     });
     engine.current = e;
@@ -163,81 +141,193 @@ export function BlockAR() {
     }
   }, [stage, camOk]);
 
-  useEffect(() => { setHint(null); }, [mode]);
-  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 1800); return () => clearTimeout(t); }, [toast]);
+  // FIX 2: Track ended/mute listeners — trigger immediate recovery, don't wait for 2.5s polling.
+  // Old listeners are removed when stream changes to avoid duplicates.
+  const trackListenersRef = useRef<Map<MediaStreamTrack, { onended: () => void; onmute: () => void }>>(new Map());
+  function attachTrackListeners(s: MediaStream) {
+    // Remove old listeners first
+    trackListenersRef.current.forEach((handlers, track) => {
+      track.removeEventListener("ended", handlers.onended);
+      track.removeEventListener("mute", handlers.onmute);
+    });
+    trackListenersRef.current.clear();
+    // Attach to new stream's video tracks
+    s.getVideoTracks().forEach((track) => {
+      const onended = () => {
+        if (!camState.current.xr && camState.current.handsWanted) {
+          void restoreVideoPipeline("track-ended");
+        }
+      };
+      const onmute = () => {
+        if (!camState.current.xr && camState.current.handsWanted) {
+          void restoreVideoPipeline("track-muted");
+        }
+      };
+      track.addEventListener("ended", onended);
+      track.addEventListener("mute", onmute);
+      trackListenersRef.current.set(track, { onended, onmute });
+    });
+  }
 
-  // Diagnostics: update store with live camera/video state every 500ms
-  useEffect(() => {
-    const iv = setInterval(() => {
-      const v = videoRef.current;
-      const track = streamRef.current?.getVideoTracks()[0];
-      diagnosticsStore.update({
-        cameraOwner: cameraState.owner,
-        frameSource: frameSourceFor(cameraState),
-        videoReadyState: v?.readyState ?? 0,
-        videoCurrentTime: v?.currentTime ?? 0,
-        trackReadyState: track?.readyState ?? "none",
-        trackMuted: track?.muted ?? false,
-        xrActive: cameraState.xr,
-      });
-    }, 500);
-    return () => clearInterval(iv);
-  }, [cameraState]);
-
-  // FIX: Handle tab background/screen lock — close camera when hidden, reopen when visible.
-  // Without this, the stream dies silently and the app freezes on return.
+  // FIX 1: visibilitychange — pause hand tracking when tab hidden, restore when visible.
+  // XR active → do nothing (XR session owns the camera).
   useEffect(() => {
     const onVis = () => {
       if (document.hidden) {
-        // Tab hidden: stop camera to release it cleanly
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach((t) => t.stop());
-        }
-        setCameraState((s) => cameraReducer(s, { type: "CAMERA_LOST" }));
-        diagnosticsStore.update({ lastError: "Tab hidden — camera released" });
+        // Tab hidden: pause hand tracking to stop frame processing
+        handRuntime.current?.setFrameSource("none");
       } else {
-        // Tab visible again: reopen fresh stream if hands were wanted
-        if (cameraStateRef.current.handsWanted && stage === "build") {
-          setTimeout(() => {
-            allowCameraRef.current?.().then((s) => {
-              if (s) {
-                setCameraState((prev) => cameraReducer(prev, { type: "CAMERA_RESTORED" }));
-                handRuntime.current?.rebindStream(s);
-                setToast("Camera restored");
-              }
-            }).catch(() => {
-              setToast("Camera restore failed — tap Retry camera");
-            });
-          }, 300);
+        // Tab visible: restore camera pipeline if hands wanted and XR not active
+        if (camState.current.handsWanted && !camState.current.xr) {
+          void restoreVideoPipeline("restore");
         }
       }
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
-  }, [stage]);
+  }, []);
 
-  function stopCamera(reason = "Camera stopped") {
-    // Stop hand tracking first to avoid it holding camera references.
-    stopHands.current?.();
-    stopHands.current = null;
-    setHand("off");
-    setHandSeen(false);
-    setHandError(null);
-    clearHandCanvas();
-    setCameraState((s) => cameraReducer(s, { type: "CAMERA_LOST" }));
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
+  /** Open the rear camera without touching app stage (used for silent recovery). */
+  async function acquireRearStream(): Promise<MediaStream> {
+    const tries: MediaTrackConstraints[] = [
+      { facingMode: { exact: "environment" }, width: { ideal: 960, max: 960 }, height: { ideal: 540, max: 540 } },
+      { facingMode: "environment", width: { ideal: 960, max: 960 }, height: { ideal: 540, max: 540 } },
+    ];
+    let last: unknown = null;
+    for (const video of tries) {
+      try {
+        const s = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+        if (await isEnvironmentStream(s)) return s;
+        s.getTracks().forEach((t) => t.stop());
+      } catch (e) { last = e; }
     }
-    if (videoRef.current) videoRef.current.srcObject = null;
-    setCamOk(false);
-    setToast(reason);
+    throw last instanceof Error ? last : new Error("Rear camera unavailable");
   }
 
-  const allowCameraRef = useRef<(() => Promise<MediaStream | null>) | null>(null);
-  useEffect(() => { allowCameraRef.current = allowCamera; });
+  const recoveringCamera = useRef(false);
+  const restoreQueued = useRef<string | null>(null);
+  /** Bumped whenever camera ownership moves away from the DOM camera; in-flight restores abort. */
+  const camEpoch = useRef(0);
+  const autoExitingXR = useRef(false);
+  const rawWatchdog = useRef(new RawFrameWatchdog(2500));
+  const rawStalls = useRef(0);
 
-  async function allowCamera(): Promise<MediaStream | null> {    setCamErr(null);
+  /**
+   * Restore the rear DOM camera → MediaPipe pipeline (after XR ends or the stream stalls).
+   * Only the camera/hand pipeline is touched; renderer, world and UI keep running.
+   */
+  async function restoreVideoPipeline(reason: string) {
+    const rt = handRuntime.current;
+    if (!rt || camState.current.xr) return;
+    if (recoveringCamera.current) { restoreQueued.current = reason; return; }
+    recoveringCamera.current = true;
+    const epoch = camEpoch.current;
+    const stale = () => camState.current.xr || !camState.current.handsWanted && reason !== "xr-failed" || handRuntime.current !== rt || camEpoch.current !== epoch;
+    try {
+      let s = streamRef.current;
+      if (needsFreshStream(reason, s?.getVideoTracks()[0])) {
+        // Old stream may be muted/black after AR held the camera: always reopen.
+        rt.setFrameSource("none");
+        s?.getTracks().forEach((t) => t.stop());
+        if (streamRef.current === s) streamRef.current = null;
+        s = null;
+        if (reason === "xr-ended") await sleep(350); // let Android release the camera from the AR session
+        for (let i = 0; i < 4 && !s; i++) {
+          if (stale()) return;
+          try { s = await acquireRearStream(); } catch { await sleep(500 * (i + 1)); }
+          if (stale()) { s?.getTracks().forEach((t) => t.stop()); return; }
+        }
+      }
+      if (!s) {
+        setToast("Camera unavailable — retrying. Touch building still works.");
+        rt.setFrameSource("none");
+        dispatchCamera({ type: "CAMERA_LOST" });
+        // Never give up permanently: try again shortly.
+        setTimeout(() => {
+          if (handRuntime.current === rt && camState.current.handsWanted && !camState.current.xr) void restoreVideoPipeline("retry");
+        }, 4000);
+        return;
+      }
+      streamRef.current = s;
+      setCamOk(true);
+      attachTrackListeners(s);
+      if (videoRef.current && videoRef.current.srcObject !== s) {
+        videoRef.current.srcObject = s;
+        void videoRef.current.play().catch(() => {});
+      }
+      rt.setFrameSource("video", s);
+      dispatchCamera({ type: "CAMERA_RESTORED" });
+      setToast(reason === "xr-ended" ? "Rear-camera hand mode on · pinch to build" : "Camera restored — hand control resumed");
+    } finally {
+      recoveringCamera.current = false;
+      const q = restoreQueued.current;
+      restoreQueued.current = null;
+      if (q && handRuntime.current && !camState.current.xr && camState.current.handsWanted) void restoreVideoPipeline(q);
+    }
+  }
+
+  /** AR is on but can't feed hands: leave AR (anchor kept) and return to rear-camera hand mode. */
+  function autoExitXRForHands() {
+    const e = engine.current;
+    if (!e || autoExitingXR.current) return;
+    autoExitingXR.current = true;
+    handRuntime.current?.setFrameSource("none");
+    e.handLost();
+    setToast("This phone can't share the AR camera — switching to rear-camera hand mode. Your build stays anchored.");
+    void e.stopXR(true).finally(() => { setTimeout(() => { autoExitingXR.current = false; }, 300); });
+  }
+
+  /** Single place where camera ownership changes and the hand frame source follows. */
+  function dispatchCamera(ev: CameraEvent, quiet = false) {
+    const prev = camState.current;
+    const next = cameraReducer(prev, ev);
+    camState.current = next;
+    setCamOwner(next);
+    if (ev.type === "XR_STARTED" || ev.type === "HANDS_OFF") camEpoch.current++;
+    if (ev.type === "XR_STARTED" && ev.rawCamera) { rawStalls.current = 0; rawWatchdog.current.reset(performance.now()); }
+    const rt = handRuntime.current;
+    const e = engine.current;
+    const src = frameSourceFor(next);
+    if (src === "xr" && rt) {
+      e?.setXRCameraSink({
+        want: (now) => rt.wantsExternalFrame(now),
+        push: (px, w, h, now) => { if (rt.submitPixels(px, w, h, now)) rawWatchdog.current.fed(now); },
+      });
+    } else {
+      e?.setXRCameraSink(null);
+    }
+    if (rt) {
+      if (src === "xr") rt.setFrameSource("xr");
+      else if (src === "none") rt.setFrameSource("none");
+      else if (src === "video" && rt.getFrameSource() !== "video") void restoreVideoPipeline(ev.type === "XR_ENDED" ? "xr-ended" : "restore");
+    }
+
+    const probing = quiet || e?.rawCameraState() === "pending";
+    if (rt && xrHandoffAction(next, probing) === "exit-xr-for-hands") { autoExitXRForHands(); return; }
+
+    if (ev.type === "XR_STARTED" && next.handsWanted && !quiet && next.rawCamera) {
+      setToast("AR on · hand control uses the AR camera");
+    }
+  }
+
+  // Raw-camera watchdog: XR frames stopped while the hand pipeline wanted them.
+  useEffect(() => {
+    if (stage !== "build") return;
+    const id = window.setInterval(() => {
+      const s = camState.current, rt = handRuntime.current;
+      if (s.owner !== "CAMERA_XR_RAW_CAMERA" || !s.handsWanted || !rt) return;
+      const now = performance.now();
+      if (!rawWatchdog.current.check(now, rt.wantsExternalFrame(now))) return;
+      rawWatchdog.current.reset(now);
+      rawStalls.current++;
+      if (rawStalls.current < 2) { rt.setFrameSource("xr"); return; } // first: reset the frame gate
+      engine.current?.markRawCameraFailed(); // second: give up on raw camera → automatic handoff
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [stage]);
+
+  async function allowCamera(): Promise<MediaStream | null> {
+    setCamErr(null);
     try {
       let s: MediaStream;
       try {
@@ -266,16 +356,6 @@ export function BlockAR() {
       }
       streamRef.current = s;
       setCamOk(true);
-      setCameraState((prev) => cameraReducer(prev, { type: "CAMERA_RESTORED" }));
-      // FIX: Listen for track "ended" (permission revoked, device disconnected).
-      // Previously this was only detected via 2.5s polling — now we react immediately.
-      s.getVideoTracks().forEach((track) => {
-        track.onended = () => {
-          diagnosticsStore.setError("Camera track ended — attempting recovery");
-          setCameraState((prev) => cameraReducer(prev, { type: "CAMERA_LOST" }));
-          handRuntime.current?.onCameraStalled?.("ended");
-        };
-      });
       if (videoRef.current) {
         videoRef.current.srcObject = s;
         await videoRef.current.play().catch(() => {});
@@ -299,45 +379,20 @@ export function BlockAR() {
 
   async function enterXR() {
     if (!engine.current || !overlayRef.current) return;
-
-    const isMobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
-    const handsActive = hand === "on" && !!handRuntime.current;
-
-    // On phones, immersive-ar and getUserMedia may need exclusive access to
-    // the same rear camera. Keeping MediaPipe alive while starting WebXR can
-    // leave the DOM video frozen, which makes MediaPipe report HAND: LOST.
-    // Never enter this conflicting state. Users can keep hand control in the
-    // rear-camera mode, or turn it off before starting true WebXR AR.
-    if (isMobile && handsActive) {
-      setToast("Hand Control is active — turn it off before starting Room AR");
-      return;
-    }
-
-    // If a normal rear-camera stream is open, release it BEFORE requesting
-    // immersive-ar. This avoids the opposite camera-ownership race.
-    if (streamRef.current) {
-      stopHands.current?.();
-      stopHands.current = null;
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-      setCamOk(false);
-      setHand("off");
-      setHandSeen(false);
-      setHandError(null);
-      clearHandCanvas();
-    }
-
     try {
       await engine.current.startXR(overlayRef.current);
-      setToast("AR on — choose a surface, then pinch to build");
-    } catch (err) {
-      // If WebXR cannot start, restore the normal rear-camera mode instead
-      // of leaving the app with a dead/frozen camera.
-      setToast((err as Error).message || "AR could not start");
+      if (!autoExitingXR.current && engine.current?.isXR()) setToast("AR on — choose a surface, then pinch to build");
+    } catch {
+      // Some browsers only grant AR when no other camera stream is open: release it once and retry.
+      // The hand runtime stays alive; its frame source is switched by camera ownership.
       try {
-        await allowCamera();
-      } catch {
-        // The error toast from allowCamera is already user-visible.
+        handRuntime.current?.setFrameSource("none");
+        streamRef.current?.getTracks().forEach((t) => t.stop()); streamRef.current = null; setCamOk(false);
+        await engine.current.startXR(overlayRef.current);
+        if (!autoExitingXR.current && engine.current?.isXR()) setToast("AR on — choose a surface, then pinch to build");
+      } catch (err) {
+        setToast((err as Error).message || "AR could not start");
+        if (handRuntime.current) void restoreVideoPipeline("xr-failed");
       }
     }
   }
@@ -345,19 +400,6 @@ export function BlockAR() {
 
   useEffect(() => { engine.current?.setScale(1); }, [size, stage]);
   useEffect(() => () => stopHands.current?.(), []);
-
-  // The <video> element mounts only when camOk flips true, and React commits
-  // that asynchronously — so after allowCamera() the ref can still be null.
-  // Wait for it instead of throwing "not mounted" on a timing race.
-  async function waitForVideoElement(timeoutMs = 4000): Promise<HTMLVideoElement> {
-    const start = Date.now();
-    for (;;) {
-      const v = videoRef.current;
-      if (v) return v;
-      if (Date.now() - start > timeoutMs) throw new Error("Rear camera video layer not mounted");
-      await new Promise((r) => setTimeout(r, 60));
-    }
-  }
 
   async function toggleHands() {
     if (hand === "starting" || hand === "initializing") return;
@@ -369,7 +411,7 @@ export function BlockAR() {
       setHandSeen(false);
       setHandError(null);
       clearHandCanvas();
-      setCameraState((s) => cameraReducer(s, { type: "HANDS_OFF" }));
+      dispatchCamera({ type: "HANDS_OFF" });
       if (engine.current?.isXR()) {
         engine.current.setHandTrackingEnabled(false);
       }
@@ -380,7 +422,6 @@ export function BlockAR() {
 
     setHand("starting");
     setHandError(null);
-    setCameraState((s) => cameraReducer(s, { type: "HANDS_ON" }));
     const e0 = engine.current;
 
     // Primary: WebXR — only when the session really exposes native hand joints (headsets).
@@ -395,28 +436,40 @@ export function BlockAR() {
     }
 
     // Phones: WebXR AR exposes no hand joints, so MediaPipe reads the camera.
-    // We keep the AR session (and therefore the real-world anchor) alive if the
-    // camera can be shared; only if the OS refuses do we leave AR, and even
-    // then the anchored construction root keeps its real-world pose.
+    // With Raw Camera Access the AR session keeps running and feeds the hand
+    // worker. Without it, AR and a second camera stream can't coexist on phones,
+    // so leave AR first (anchored construction root keeps its pose) and then
+    // open the rear DOM camera — never a stale/black stream opened during AR.
     setBackendType("MEDIAPIPE FALLBACK");
+    let xrRaw = false;
+    let leftXR = false;
+    if (e0?.isXR()) {
+      for (let i = 0; i < 25 && e0.isXR() && e0.rawCameraState() === "pending"; i++) await sleep(100);
+      xrRaw = e0.isXR() && e0.rawCameraState() === "yes";
+      if (e0.isXR() && !xrRaw) {
+        setToast("This phone can't share the AR camera — switching to rear-camera hand mode (build stays anchored)");
+        await e0.stopXR(true);
+        for (let i = 0; i < 30 && e0.isXR(); i++) await sleep(100);
+        await sleep(350); // let Android release the camera from the AR session
+        leftXR = true;
+      }
+    }
     try {
       let activeStream = streamRef.current;
-      const streamLive = !!activeStream && camOk && activeStream.getVideoTracks().some((t) => t.readyState === "live");
-      if (!streamLive) {
+      const track = activeStream?.getVideoTracks()[0];
+      const streamLive = !leftXR && camOk && !needsFreshStream("restore", track);
+      if (xrRaw) {
+        activeStream = null; // XR session owns the camera; frames come from Raw Camera Access
+      } else if (!streamLive) {
+        if (leftXR) { activeStream?.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
         setToast("Requesting camera for hand tracking…");
-        try {
-          activeStream = await allowCamera();
-        } catch {
-          if (e0?.isXR()) {
-            // The XR session holds the camera exclusively — release it but keep the anchor.
-            await e0.stopXR(true);
-            activeStream = await allowCamera();
-          } else throw new Error("Camera could not be activated");
-        }
+        activeStream = await allowCamera().catch(() => null);
+        if (!activeStream) throw new Error("Camera could not be activated");
       }
-      if (!activeStream) throw new Error("Camera could not be activated");
+      if (!activeStream && !xrRaw) throw new Error("Camera could not be activated");
       if (!handCanvas.current) throw new Error("Hand layer not mounted");
-      const hv = await waitForVideoElement();
+      const hv = videoRef.current;
+      if (!hv) throw new Error("Rear camera video layer not mounted");
 
       setHand("initializing");
       hv.muted = true;
@@ -433,11 +486,13 @@ export function BlockAR() {
         // Hand gone → freeze the world construction instead of teleporting it.
         if (!l) { engine.current?.handLost(); setPinch(false); }
         if (d.system === "ERROR" && d.error) { setHand("error"); setHandError(d.error); }
-      }, { testCube: false, camera: e0?.getCamera() });
+        else if (d.system === "TRACKING" && handRef.current === "error") { setHand("on"); setHandError(null); }
+      }, { testCube: false, ...(e0 ? { camera: e0.getCamera() } : {}) });
       // MediaPipe lifted point is already WORLD SPACE. Send it directly;
       // engine converts world -> ConstructionRoot local exactly once.
       rt.onPinchWorld = (_side, world, held) => {
-        const e = engine.current; if (!e || !anyHand) return;
+        // In XR the lifted point uses the non-XR camera; XR uses the screen-ray path below.
+        const e = engine.current; if (!e || !anyHand || e.isXR()) return;
         e.handSamplePoint(world, held);
         setPinch(held);
       };
@@ -449,51 +504,20 @@ export function BlockAR() {
         e.handSample(nx, ny, held);
         setPinch(held);
       };
+      rt.onCameraStalled = () => {
+        if (camState.current.xr) return;
+        engine.current?.handLost();
+        void restoreVideoPipeline("stalled");
+      };
       rt.onOwnerLost = () => {
         engine.current?.handLost();
         setPinch(false);
       };
-      // FIX: Handle camera stall/ended with fresh stream reopen (max 3 retries).
-      // Previously onCameraStalled was null → silent freeze.
-      let stallRetries = 0;
-      rt.onCameraStalled = (reason: string) => {
-        diagnosticsStore.setError(`Camera ${reason} — attempting recovery (${stallRetries + 1}/3)`);
-        setCameraState((s) => cameraReducer(s, { type: "CAMERA_LOST" }));
-        if (stallRetries >= 3) {
-          setToast("Camera failed 3 times — tap Retry camera");
-          diagnosticsStore.setError("Camera stall: 3 retries exhausted. Manual retry needed.");
-          return;
-        }
-        stallRetries++;
-        // Stop dead stream, open fresh one
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach((t) => t.stop());
-          streamRef.current = null;
-        }
-        if (videoRef.current) videoRef.current.srcObject = null;
-        setTimeout(() => {
-          allowCameraRef.current?.().then((s) => {
-            if (s) {
-              setCameraState((prev) => cameraReducer(prev, { type: "CAMERA_RESTORED" }));
-              // Rebind the new stream to the hand runtime
-              rt.rebindStream(s);
-              diagnosticsStore.update({ lastError: null });
-              setToast("Camera recovered");
-            }
-          }).catch((e: unknown) => {
-            diagnosticsStore.setError("Stall recovery failed: " + (e instanceof Error ? e.message : String(e)));
-          });
-        }, 500);
-      };
       handRuntime.current = rt;
       stopHands.current = () => { rt.dispose(); handRuntime.current = null; setHandLabels([]); engine.current?.handLost(); };
-      // Timeout guard: if MediaPipe hangs (worker/WASM issue), don't stay stuck on "Please wait..." forever.
-      // 90s covers the 80s worker timeout + margin.
-      await Promise.race([
-        rt.start("mediapipe", { stream: activeStream }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Hand tracking startup timed out (90s) — try again")), 90000)),
-      ]);
+      await rt.start("mediapipe", xrRaw ? { frameSource: "xr" } : { stream: activeStream! });
       if (rt.getSystem() !== "TRACKING") throw new Error(rt.getError() || "Hand tracking failed to start");
+      dispatchCamera({ type: "HANDS_ON" });
       setHand("on");
       setGuide(false);
       setToast(engine.current?.isXR()
@@ -510,6 +534,8 @@ export function BlockAR() {
     }
   }
   toggleHandsRef.current = toggleHands;
+  const handRef = useRef(hand);
+  handRef.current = hand;
   function clearHandCanvas() { /* 3D hand layer clears itself on stop */ }
 
   async function runAI() {
@@ -521,44 +547,6 @@ export function BlockAR() {
       else { engine.current?.addMany(blocks); setToast(`Built ${blocks.length} blocks`); setAiOpen(false); setAiText(""); }
     } catch (err) { setToast((err as Error).message || "AI build failed"); }
     setAiBusy(false);
-  }
-
-  async function runRodin() {
-    const prompt = rodinPrompt.trim();
-    if (prompt.length < 8 || rodinBusy) return;
-    setRodinBusy(true);
-    setRodinStatusText("Submitting to Rodin…");
-    try {
-      const job = await rodinGenerate({ data: { prompt } });
-      setRodinStatusText("Generating 3D asset…");
-      const deadline = Date.now() + 20 * 60 * 1000;
-      let delay = 5000;
-      let done = false;
-      while (Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        const status = await rodinStatus({ data: { subscriptionKey: job.subscriptionKey } });
-        if (status.status === "failed") throw new Error("Rodin generation failed.");
-        if (status.status === "done") { done = true; break; }
-        setRodinStatusText("Still generating…");
-        delay = Math.min(delay + 5000, 30000);
-      }
-      if (!done) throw new Error("Rodin generation timed out.");
-      setRodinStatusText("Downloading GLB…");
-      const result = await rodinDownload({ data: { taskUuid: job.taskUuid } });
-      if (!engine.current) throw new Error("3D engine is not ready.");
-      setRodinStatusText("Adding asset to AR world…");
-      await engine.current.addGLBFromUrl(result.url);
-      setToast("3D asset added to BlockAR");
-      setRodinOpen(false);
-      setRodinPrompt("");
-      setRodinStatusText(null);
-    } catch (err) {
-      const message = err?.message || "Rodin generation failed";
-      setRodinStatusText(null);
-      setToast(message);
-    } finally {
-      setRodinBusy(false);
-    }
   }
 
   const co = () => engine.current?.coaster;
@@ -634,8 +622,7 @@ export function BlockAR() {
 
   return (
     <main ref={overlayRef} className="fixed inset-0 overflow-hidden bg-background text-foreground select-none">
-      {camOk && <video ref={videoRef} playsInline muted className="absolute inset-0 h-full w-full object-cover" />}
-      <DiagnosticsOverlay />
+      <video ref={videoRef} playsInline muted className={cn("absolute inset-0 h-full w-full object-cover", !camOk && "invisible")} />
       {!camOk && <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_70%,var(--glow),transparent_65%)]" />}
       {stage === "build" && <canvas ref={canvasRef} className="absolute inset-0 h-full w-full touch-none" />}
       <canvas ref={handCanvas} className="pointer-events-none absolute inset-0 h-full w-full" />
@@ -674,14 +661,14 @@ export function BlockAR() {
                   disabled={hand === "starting" || hand === "initializing"}
                   className={cn(
                     "hud pointer-events-auto flex w-[116px] flex-col items-start gap-1 p-2 text-[10px] select-none transition-all active:scale-95 border",
-                    hand === "on" ? "border-brand-cyan bg-card/95 shadow-md" : "border-border/60 hover:border-brand-cyan/50",
+                    hand === "on" ? "border-brand-cyan bg-card/95 shadow-md" : hand === "error" ? "border-destructive bg-destructive/10" : "border-border/60 hover:border-brand-cyan/50",
                     (hand === "starting" || hand === "initializing") && "cursor-wait opacity-70"
                   )}
                 >
                   <div className="flex w-full items-center justify-between gap-1 font-semibold uppercase tracking-wider">
                     <div className="flex items-center gap-1.5">
                       <Hand className={cn("h-3.5 w-3.5", hand === "on" ? "text-brand-cyan" : "text-muted-foreground")} />
-                      <span>{hand === "off" ? "Hand: OFF" : hand === "starting" ? "Hand: STARTING" : hand === "initializing" ? "Hand: INIT" : hand === "error" ? "Hand: N/A" : `Hand: ${handStatus.toUpperCase()}`}</span>
+                      <span>{hand === "off" ? "Hand: OFF" : hand === "starting" ? "Hand: STARTING" : hand === "initializing" ? "Hand: INIT" : hand === "error" ? "Hand: ERROR" : `Hand: ${handStatus.toUpperCase()}`}</span>
                     </div>
                     <span className={cn("h-2 w-2 rounded-full", {
                       "bg-success animate-pulse": hand === "on" && handStatus === "tracking",
@@ -689,7 +676,8 @@ export function BlockAR() {
                       "bg-brand-pink": hand === "on" && handStatus === "grabbing",
                       "bg-amber-400": hand === "on" && handStatus === "frozen",
                       "bg-yellow-400 animate-spin": hand === "on" && handStatus === "reacquiring",
-                      "bg-muted-foreground": hand === "error" || hand === "off" || handStatus === "lost",
+                      "bg-destructive": hand === "error",
+                      "bg-muted-foreground": hand === "off" || handStatus === "lost",
                     })} />
                   </div>
                   <div className="flex flex-col text-[8.5px] leading-tight text-muted-foreground">
@@ -697,7 +685,7 @@ export function BlockAR() {
                       {backendType}
                     </span>
                     <span>
-                      {hand === "off" ? "Tap to enable" : hand === "error" ? "Unavailable — touch works fully" : hand === "on" ? (handSeen ? "Hand detected" : "Looking for hand…") : "Please wait…"}
+                      {hand === "off" ? "Tap to enable" : hand === "error" ? (handError?.slice(0, 24) || "Failed") : hand === "on" ? (handSeen ? "Hand detected" : "Looking for hand…") : "Please wait…"}
                     </span>
                   </div>
                 </button>
@@ -721,9 +709,6 @@ export function BlockAR() {
                 <span>{camOk ? "Back camera" : "Camera off"}</span>
                 <span className={cn("h-2 w-2 rounded-full", camOk ? "bg-success" : "bg-muted-foreground")} />
               </div>
-              {camOk && (
-                <button onClick={() => stopCamera()} className="pointer-events-auto rounded-xl bg-destructive px-3 py-2 text-xs font-semibold text-destructive-foreground">Stop Camera</button>
-              )}
               {xrOk && !engine.current?.isXR() && (
                 <button onClick={enterXR} className="pointer-events-auto rounded-xl bg-success px-3 py-2 text-xs font-semibold text-background">Start WebXR AR</button>
               )}
@@ -764,37 +749,15 @@ export function BlockAR() {
               </div>
             </div>
           )}
-          {riding ? null : (
-            <>
-              {aiOpen ? (
-                <form onSubmit={(e) => { e.preventDefault(); runAI(); }} className="hud pointer-events-auto mb-2 flex items-center gap-2 p-2">
-                  <Sparkles className="ml-1 h-5 w-5 shrink-0 text-brand-pink" />
-                  <input autoFocus value={aiText} onChange={(e) => setAiText(e.target.value)} maxLength={300} placeholder="Build voxel blocks… a house, tree, car" className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-muted-foreground" />
-                  <button disabled={aiBusy || !aiText.trim()} className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">{aiBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Build"}</button>
-                  <button type="button" aria-label="Close" onClick={() => setAiOpen(false)} className="p-1 text-muted-foreground"><X className="h-4 w-4" /></button>
-                </form>
-              ) : rodinOpen ? (
-                <form onSubmit={(e) => { e.preventDefault(); runRodin(); }} className="hud pointer-events-auto mb-2 flex flex-col gap-2 p-2">
-                  <div className="flex items-center gap-2">
-                    <Wand2 className="ml-1 h-5 w-5 shrink-0 text-brand-violet" />
-                    <input autoFocus value={rodinPrompt} onChange={(e) => setRodinPrompt(e.target.value)} maxLength={1024} placeholder="Describe a 3D asset…" className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-muted-foreground" />
-                    <button type="button" aria-label="Close" disabled={rodinBusy} onClick={() => { setRodinOpen(false); setRodinStatusText(null); }} className="p-1 text-muted-foreground disabled:opacity-40"><X className="h-4 w-4" /></button>
-                  </div>
-                  {rodinStatusText && <div className="px-2 text-[11px] text-muted-foreground">{rodinStatusText}</div>}
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="px-2 text-[10px] text-muted-foreground">Rodin Gen-2.5 · GLB · mobile-ready</span>
-                    <button disabled={rodinBusy || rodinPrompt.trim().length < 8} className="rounded-xl bg-gradient-to-r from-brand-violet to-brand-pink px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">
-                      {rodinBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Generate 3D"}
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                <div className="pointer-events-auto mx-auto mb-2 flex items-center gap-2">
-                  <button onClick={() => { setAiOpen(true); setRodinOpen(false); }} className="flex items-center gap-2 rounded-full bg-gradient-to-r from-brand-violet to-brand-pink px-4 py-2 text-sm font-semibold text-primary-foreground shadow-lg"><Sparkles className="h-4 w-4" />AI Build</button>
-                  <button onClick={() => { setRodinOpen(true); setAiOpen(false); }} className="flex items-center gap-2 rounded-full border border-brand-violet/60 bg-card/90 px-4 py-2 text-sm font-semibold text-foreground shadow-lg"><Wand2 className="h-4 w-4 text-brand-violet" />AI 3D</button>
-                </div>
-              )}
-            </>
+          {riding ? null : aiOpen ? (
+            <form onSubmit={(e) => { e.preventDefault(); runAI(); }} className="hud pointer-events-auto mb-2 flex items-center gap-2 p-2">
+              <Sparkles className="ml-1 h-5 w-5 shrink-0 text-brand-pink" />
+              <input autoFocus value={aiText} onChange={(e) => setAiText(e.target.value)} maxLength={300} placeholder="Type anything… a house, a tree, a car" className="min-w-0 flex-1 bg-transparent py-2 text-sm outline-none placeholder:text-muted-foreground" />
+              <button disabled={aiBusy || !aiText.trim()} className="rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:opacity-50">{aiBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Build"}</button>
+              <button type="button" aria-label="Close" onClick={() => setAiOpen(false)} className="p-1 text-muted-foreground"><X className="h-4 w-4" /></button>
+            </form>
+          ) : (
+            <button onClick={() => setAiOpen(true)} className="pointer-events-auto mx-auto mb-2 flex items-center gap-2 rounded-full bg-gradient-to-r from-brand-violet to-brand-pink px-4 py-2 text-sm font-semibold text-primary-foreground shadow-lg"><Sparkles className="h-4 w-4" />AI Build</button>
           )}
           {mode === "track" && !riding && (
             <div className="hud pointer-events-auto mb-2 flex items-center justify-between gap-1 p-1.5 text-[10px]">
@@ -817,6 +780,13 @@ export function BlockAR() {
               </button>
               <button onClick={togglePov} className="hud flex items-center gap-1.5 px-3 py-2.5 text-xs"><Eye className="h-4 w-4 text-brand-cyan" />{pov ? "First person" : "Watch"}</button>
               {riding && <div className="hud px-3 py-2.5 font-display text-sm font-semibold tabular-nums">{speed} km/h</div>}
+            </div>
+          )}
+          {handsPausedByXR(camOwner) && !rawPending && (
+            <div role="status" className="hud pointer-events-auto mx-auto mb-2 flex max-w-sm items-center gap-2 px-3 py-2 text-xs">
+              <Hand className="h-4 w-4 shrink-0 text-brand-cyan" />
+              <span>This phone can't share the AR camera — switching to rear-camera hand mode. Your build stays anchored.</span>
+              <button onClick={() => { void engine.current?.stopXR(true); }} className="shrink-0 rounded-lg bg-primary px-2 py-1 font-semibold text-primary-foreground">Use hands</button>
             </div>
           )}
           {toast && <div className="mx-auto mb-2 rounded-full bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground">{toast}</div>}
