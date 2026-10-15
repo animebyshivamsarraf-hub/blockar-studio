@@ -8,8 +8,10 @@ import { FrameGate } from "./frameGate";
 import { MAX_WORKER_RESTARTS, WORKER_INFERENCE_TIMEOUT_MS } from "./workerPolicy";
 import type { FrameSource } from "../camera/CameraOwnership";
 
-const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm";
-const MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+// WASM and model are bundled locally (public/wasm/, public/models/) —
+// no CDN dependency, eliminates "ModuleFactory not set" failures.
+const getWasmUrl = () => `${typeof location !== "undefined" ? location.origin : ""}/wasm`;
+const getModelUrl = () => `${typeof location !== "undefined" ? location.origin : ""}/models/hand_landmarker.task`;
 
 export type SystemState = "OFF" | "STARTING" | "INITIALIZING" | "TRACKING" | "ERROR";
 export type Backend = "NONE" | "WEBXR" | "MEDIAPIPE" | "DEMO";
@@ -344,9 +346,9 @@ export class HandSystemRuntime {
 
     const { FilesetResolver, HandLandmarker } = await import("@mediapipe/tasks-vision");
     const init = (async () => {
-      const fileset = await FilesetResolver.forVisionTasks(WASM);
+      const fileset = await FilesetResolver.forVisionTasks(getWasmUrl());
       const opts = (delegate: "GPU" | "CPU") => ({
-        baseOptions: { modelAssetPath: MODEL, delegate },
+        baseOptions: { modelAssetPath: getModelUrl(), delegate },
         runningMode: "LIVE_STREAM" as const,
         numHands: 2,
         minHandDetectionConfidence: 0.5,
