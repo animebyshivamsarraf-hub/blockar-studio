@@ -226,8 +226,16 @@ export function BlockAR() {
     return () => document.removeEventListener("visibilitychange", onVis);
   }, []);
 
+  /** Debug helper: log getUserMedia calls only when ?debug=cam is in URL. */
+  function debugCamLog(...args: unknown[]) {
+    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "cam") {
+      console.log(`[cam ${new Date().toISOString()}]`, ...args);
+    }
+  }
+
   /** Open the rear camera without touching app stage (used for silent recovery). */
   async function acquireRearStream(): Promise<MediaStream> {
+    debugCamLog("acquireRearStream: requesting getUserMedia");
     const tries: MediaTrackConstraints[] = [
       { facingMode: { exact: "environment" }, width: { ideal: 960, max: 960 }, height: { ideal: 540, max: 540 } },
       { facingMode: "environment", width: { ideal: 960, max: 960 }, height: { ideal: 540, max: 540 } },
@@ -236,9 +244,10 @@ export function BlockAR() {
     for (const video of tries) {
       try {
         const s = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+        debugCamLog("acquireRearStream: got stream", s.id);
         if (await isEnvironmentStream(s)) return s;
         s.getTracks().forEach((t) => t.stop());
-      } catch (e) { last = e; }
+      } catch (e) { last = e; debugCamLog("acquireRearStream: failed", e); }
     }
     throw last instanceof Error ? last : new Error("Rear camera unavailable");
   }
@@ -367,6 +376,7 @@ export function BlockAR() {
 
   async function allowCamera(): Promise<MediaStream | null> {
     setCamErr(null);
+    debugCamLog("allowCamera: requesting getUserMedia");
     try {
       let s: MediaStream;
       try {
@@ -376,6 +386,7 @@ export function BlockAR() {
           height: { ideal: 540, max: 540 },
         },
         audio: false });
+        debugCamLog("allowCamera: got stream", s.id);
       } catch {
         try {
           s = await navigator.mediaDevices.getUserMedia({ video: {
