@@ -456,6 +456,12 @@ export function BlockAR() {
         // `if (xrStarting.current) return` in restoreVideoPipeline skips xr-failed silently.
         xrStarting.current = false;
         if (handRuntime.current) void restoreVideoPipeline("xr-failed");
+        else void acquireRearStream().then((s) => {
+          // Hands were off: no runtime to restore, reopen camera directly
+          // or preview stays black (tracks already stopped above).
+          streamRef.current = s; setCamOk(true); attachTrackListeners(s);
+          if (videoRef.current) { videoRef.current.srcObject = s; void videoRef.current.play().catch(() => {}); }
+        }).catch(() => {});
       }
     } finally {
       xrStarting.current = false;
