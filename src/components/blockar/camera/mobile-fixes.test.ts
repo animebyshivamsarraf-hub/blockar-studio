@@ -89,6 +89,30 @@ describe("track listener debounce re-verification", () => {
     expect(stillBad).toBe(false);
   });
 
+  it("old track timer does not restore after stream changed", () => {
+    // Simulate: timer scheduled for oldTrack, then stream replaced with newTrack.
+    // When timer fires, currentTrack !== oldTrack → return early, no restore.
+    const oldTrack = { id: "old" };
+    const newTrack = { id: "new" };
+    let currentTrack: unknown = newTrack; // streamRef.current.getVideoTracks()[0]
+    let restoreCalled = false;
+    // Simulate timer callback for oldTrack:
+    const timerCallback = (track: unknown) => {
+      if (currentTrack !== track) return; // stale track → do nothing
+      restoreCalled = true;
+    };
+    timerCallback(oldTrack);
+    expect(restoreCalled).toBe(false);
+    // Sanity: timer for current track WOULD proceed (other checks aside)
+    let restoreCalled2 = false;
+    const timerCallback2 = (track: unknown) => {
+      if (currentTrack !== track) return;
+      restoreCalled2 = true; // (further conditions omitted for this unit)
+    };
+    timerCallback2(newTrack);
+    expect(restoreCalled2).toBe(true);
+  });
+
   it("restore when track still ended after debounce", () => {
     const trackReadyState = "ended";
     const xr = false;
