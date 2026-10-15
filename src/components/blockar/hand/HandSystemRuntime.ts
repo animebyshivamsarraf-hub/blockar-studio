@@ -74,7 +74,11 @@ const MP_INTERVAL_CPU_MS = 1000 / 10;
 const HAND_RENDER_INTERVAL_MS = 1000 / 30;
 // FIX: Phone detection shared by field initializer and reset — phones start with CPU.
 // SSR-safe: typeof navigator check so server-side import doesn't crash.
-const DEFAULT_DELEGATE: "GPU" | "CPU" = (typeof navigator !== "undefined" && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent)) ? "CPU" : "GPU";
+// Exported for unit testing.
+export function isMobileUserAgent(ua: string): boolean {
+  return /Android|iPhone|iPad|Mobile/i.test(ua);
+}
+const DEFAULT_DELEGATE: "GPU" | "CPU" = (typeof navigator !== "undefined" && isMobileUserAgent(navigator.userAgent)) ? "CPU" : "GPU";
 const HAND_COLORS: Record<Side, number> = { left: 0x7fb8ff, right: 0x4de8ff };
 
 interface HandState {
