@@ -144,6 +144,8 @@ export class HandSystemRuntime {
   /** Fired when the DOM video stream stalls/ends so the host can reacquire the camera. */
   onCameraStalled: ((reason: string) => void) | null = null;
   private stallReported = false;
+  /** True once the current stall episode has used its one free play() retry. */
+  private stallPlayRetried = false;
   private xrSession: XRSession | null = null;
   private externalStream = false;
   private xrStartT = 0;
@@ -497,6 +499,7 @@ export class HandSystemRuntime {
     this.lastVideoAdvanceT = performance.now();
     this.lastMpDetectT = 0;
     this.stallReported = false;
+    this.stallPlayRetried = false;
     this.mpFrame = {};
     if (this.backend === "MEDIAPIPE") this.session = `${this.sourceLabel()} · MediaPipe worker · ${this.workerDelegate}`;
     this.emit(true);
@@ -574,6 +577,7 @@ export class HandSystemRuntime {
     this.workerDelegate = DEFAULT_DELEGATE;
     this.frameSource = "video";
     this.stallReported = false;
+    this.stallPlayRetried = false;
     this.mpFrame = {};
     this.lastVideoTime = -1;
     this.lastMpDetectT = 0;
@@ -635,9 +639,12 @@ export class HandSystemRuntime {
     if (now - this.fpsT >= 500) { this.fps = Math.round((this.fpsFrames * 1000) / (now - this.fpsT)); this.fpsFrames = 0; this.fpsT = now; }
 
     const samples: Partial<Record<Side, THREE.Vector3[]>> = {};
+    // The camera stall watchdog also runs in ERROR state (worker cooldown):
+    // the DOM camera is independent of the worker, so a frozen camera must
+    // still escalate to a stream restore instead of going unobserved.
+    if (this.system === "TRACKING" || this.system === "ERROR") this.checkVideoStall(now);
     if (this.system === "TRACKING") {
       this.checkWorkerWatchdog(now);
-      this.checkVideoStall(now);
       if (this.backend === "WEBXR" && xrFrame) this.sampleXR(xrFrame, samples);
       else if (this.backend === "MEDIAPIPE") this.sampleMediaPipe(now, samples);
       else if (this.backend === "DEMO") this.sampleDemo(samples);
@@ -697,7 +704,16 @@ export class HandSystemRuntime {
     const ended = !track || track.readyState === "ended";
     const stalled = this.lastVideoAdvanceT > 0 && now - this.lastVideoAdvanceT > 2500;
     if (!ended && !stalled) return;
-    if (!ended && this.video.paused) { void this.video.play().catch(() => {}); this.lastVideoAdvanceT = now; return; }
+    // One free play() retry per stall episode: the element may just be paused
+    // after a tab switch. If it stays paused/frozen after that, fall through
+    // and escalate — resetting the timer here every time would mask a wedged
+    // decoder forever and the camera would never recover.
+    if (!ended && this.video.paused && !this.stallPlayRetried) {
+      this.stallPlayRetried = true;
+      void this.video.play().catch(() => {});
+      this.lastVideoAdvanceT = now;
+      return;
+    }
     this.stallReported = true;
     this.mpFrame = {};
     this.session = ended ? "camera stream ended · waiting for camera" : "camera stalled · waiting for frames";
@@ -708,7 +724,7 @@ export class HandSystemRuntime {
     const lm = this.landmarker, v = this.video;
     if (this.frameSource === "video" && (lm || this.handWorker) && v.readyState >= 2) {
       const advanced = v.currentTime !== this.lastVideoTime;
-      if (advanced) { this.lastVideoTime = v.currentTime; this.lastVideoAdvanceT = now; if (this.stallReported) { this.stallReported = false; } }
+      if (advanced) { this.lastVideoTime = v.currentTime; this.lastVideoAdvanceT = now; if (this.stallReported) { this.stallReported = false; } this.stallPlayRetried = false; }
       // Don't depend exclusively on currentTime advancing (some devices report a
       // frozen clock); a slow refresh of a repeated frame is harmless.
       const due = now - this.lastMpDetectT >= (advanced ? this.mpIntervalMs : Math.max(this.mpIntervalMs, 400));

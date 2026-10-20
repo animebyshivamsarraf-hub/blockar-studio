@@ -8,6 +8,7 @@ import { HandSystemRuntime, isEnvironmentStream } from "./hand/HandSystemRuntime
 import { aiBuild } from "@/lib/ai-build.functions";
 import { cameraReducer, frameSourceFor, handsPausedByXR, initialCameraState, needsFreshStream, xrHandoffAction, type CameraEvent, type CameraState } from "./camera/CameraOwnership";
 import { RawFrameWatchdog } from "./camera/RawFrameWatchdog";
+import { FrameProgressTracker } from "./camera/frameStall";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 import { Sparkles, Loader2, X, Spline, Play, Square, ArrowUp, ArrowDown, Repeat, Eye, Wand2 } from "lucide-react";
@@ -136,7 +137,12 @@ export function BlockAR() {
 
   useEffect(() => {
     if (stage === "build" && videoRef.current && streamRef.current) {
-      videoRef.current.srcObject = streamRef.current;
+      // Never reassign srcObject to the stream the element already holds:
+      // on Android Chrome that restarts capture and can wedge the video on a
+      // frozen/black frame (same fix as HandSystemRuntime, commit e1a5af4).
+      if (videoRef.current.srcObject !== streamRef.current) {
+        videoRef.current.srcObject = streamRef.current;
+      }
       videoRef.current.play().catch(() => {});
     }
   }, [stage, camOk]);
@@ -227,6 +233,47 @@ export function BlockAR() {
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
   }, []);
+
+  // Preview frame watchdog: HandSystemRuntime only watches the camera while
+  // hand tracking is TRACKING. With hands off (or the runtime down) a frozen
+  // <video> would otherwise stay frozen forever — nothing detected it.
+  // Watches the video clock; on a >2.5s freeze it recovers through the same
+  // guards as the track listeners (never while hidden / XR / AR-starting).
+  const previewTracker = useRef(new FrameProgressTracker(2500));
+  useEffect(() => {
+    if (stage !== "build") return;
+    const tracker = previewTracker.current;
+    tracker.reset(performance.now());
+    let failToastShown = false;
+    const id = window.setInterval(() => {
+      const v = videoRef.current;
+      if (!v || !streamRef.current || document.hidden) return;
+      if (camState.current.xr || xrStarting.current) return;
+      if (handRuntime.current?.getSystem() === "TRACKING") return; // runtime watchdog owns it
+      if (v.readyState < 2) return;
+      if (!tracker.observe(performance.now(), v.currentTime)) { failToastShown = false; return; }
+      if (v.paused) { void v.play().catch(() => {}); return; }
+      // Frames frozen while "playing": reopen the stream — via the runtime
+      // restore path when a runtime exists, otherwise directly.
+      if (handRuntime.current) { void restoreVideoPipeline("stalled"); return; }
+      const old = streamRef.current;
+      old?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      void acquireRearStream().then((s) => {
+        streamRef.current = s;
+        setCamOk(true);
+        attachTrackListeners(s);
+        if (videoRef.current && videoRef.current.srcObject !== s) {
+          videoRef.current.srcObject = s;
+          void videoRef.current.play().catch(() => {});
+        }
+      }).catch(() => {
+        if (!failToastShown) { failToastShown = true; setToast("Camera unavailable — retrying. Touch building still works."); }
+      });
+    }, 1000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage]);
 
   /** Debug helper: log getUserMedia calls only when ?debug=cam is in URL. */
   function debugCamLog(...args: unknown[]) {

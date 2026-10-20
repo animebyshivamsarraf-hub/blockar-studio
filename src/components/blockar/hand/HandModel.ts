@@ -82,25 +82,7 @@ export class HandModelManager {
   }
 
   dispose() {
-    // Remove and dispose pinch markers
-    for (const marker of [this.leftPinchMarker, this.rightPinchMarker]) {
-      if (marker.parent) marker.parent.remove(marker);
-      marker.geometry.dispose();
-      (marker.material as THREE.Material).dispose();
-    }
-    // Remove hand models (factory-created; dispose their geometries/materials)
-    for (const model of [this.leftHandModel, this.rightHandModel]) {
-      if (!model) continue;
-      model.traverse((child) => {
-        const mesh = child as THREE.Mesh;
-        if (mesh.isMesh) {
-          mesh.geometry.dispose();
-          const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-          mats.forEach((m) => m.dispose());
-        }
-      });
-      if (model.parent) model.parent.remove(model);
-    }
-    this.leftHandModel = this.rightHandModel = null;
+    if (this.leftPinchMarker.parent) this.leftPinchMarker.parent.remove(this.leftPinchMarker);
+    if (this.rightPinchMarker.parent) this.rightPinchMarker.parent.remove(this.rightPinchMarker);
   }
 }
