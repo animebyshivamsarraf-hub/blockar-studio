@@ -1,4 +1,19 @@
 // @ts-nocheck -- strict index checks are noisy for this imperative three.js engine
+//
+// ROUND-3 REPAIRS (2026-10-21) — the ONLY changes vs the deployed 7c10361
+// engine (DEPLOYED_ENGINE_CURRENT.ts); everything else is byte-identical:
+//  (1) startXR is ATOMIC: if any setup step after requestSession rejects
+//      (setSession / reference space / hit-test source), the half-started
+//      session is ended, all XR state is cleared, and the error rethrown —
+//      previously a live session stayed parked in xrSession with isXR()
+//      true while the host believed AR had failed, holding the camera and
+//      breaking the rear-camera hand fallback.
+//  (2) The session 'end' handler now cancel()s the hit-test source before
+//      dropping it (resource hygiene; spec invalidates it anyway).
+// Verified present and deliberately UNCHANGED: hit-test IS requested and
+// consumed (the round-2 "missing requestHitTestSource" hypothesis was
+// wrong for this engine), local-floor reference space with local fallback,
+// stale-session end guard, honest raw-camera "no" (no fake producer).
 import * as THREE from "three";
 import { XRHandModelFactory } from "three/addons/webxr/XRHandModelFactory.js";
 import { GestureDetector } from "./hand/GestureDetector";
@@ -781,14 +796,30 @@ export function createEngine(o: EngineOpts) {
     } as XRSessionInit);
     xrSession = session;
     ensureXRHandVisuals();
-    // "local-floor" keeps y = 0 on the REAL floor. Plain "local" floats the
-    // origin at wherever the phone happened to be when AR started.
-    try { renderer.xr.setReferenceSpaceType("local-floor"); } catch { renderer.xr.setReferenceSpaceType("local"); }
-    await renderer.xr.setSession(session);
-    xrReferenceSpace = renderer.xr.getReferenceSpace()
-      ?? await session.requestReferenceSpace("local-floor").catch(() => session.requestReferenceSpace("local"));
-    const viewer = await session.requestReferenceSpace("viewer");
-    hitSource = (await session.requestHitTestSource?.({ space: viewer })) ?? null;
+    try {
+      // "local-floor" keeps y = 0 on the REAL floor. Plain "local" floats the
+      // origin at wherever the phone happened to be when AR started.
+      try { renderer.xr.setReferenceSpaceType("local-floor"); } catch { renderer.xr.setReferenceSpaceType("local"); }
+      await renderer.xr.setSession(session);
+      xrReferenceSpace = renderer.xr.getReferenceSpace()
+        ?? await session.requestReferenceSpace("local-floor").catch(() => session.requestReferenceSpace("local"));
+      const viewer = await session.requestReferenceSpace("viewer");
+      hitSource = (await session.requestHitTestSource?.({ space: viewer })) ?? null;
+    } catch (setupError) {
+      // ATOMIC START (round 3): any failure above must not leave a live
+      // session parked in xrSession — isXR() would report AR on while the
+      // host believes the start failed, and the orphaned session keeps the
+      // camera (silently breaking the rear-camera hand fallback) until some
+      // later retry happens to end it. End the session, clear every XR
+      // field, and rethrow so the host's existing retry/restore path runs
+      // against a clean state. The 'end' listener is not attached yet, so
+      // this teardown cannot double-fire the host notification.
+      xrSession = null;
+      hitSource = null;
+      xrReferenceSpace = null;
+      try { await session.end(); } catch { /* already ended */ }
+      throw setupError;
+    }
     try { o.onXRStateChange?.({ active: true, rawCamera: false, pending: false }); } catch { /* host errors never break XR */ }
     grid.visible = false; anchored = false;
     session.addEventListener("select", () => {
@@ -836,6 +867,7 @@ export function createEngine(o: EngineOpts) {
       if (isStaleSessionEnd(xrSession, session)) return;
       xrCameraSink = null;
       try { o.onXRStateChange?.({ active: false, rawCamera: false }); } catch { /* host errors never break XR teardown */ }
+      try { hitSource?.cancel(); } catch { /* session already ended */ }
       hitSource = null; xrSession = null; xrReferenceSpace = null;
       xrHandSeen = false; xrHandFrozen = false; xrLastLocal = null; handWasPinching = false;
       if (pinchMarker) pinchMarker.visible = false;
