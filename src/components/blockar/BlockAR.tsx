@@ -111,6 +111,8 @@ export function BlockAR() {
   const handCanvas = useRef<HTMLCanvasElement>(null);
   const stopHands = useRef<(() => void) | null>(null);
   const handRuntime = useRef<HandSystemRuntime | null>(null);
+  /** Throttle for pipeline-counter telemetry (the diag callback fires ~10×/s). */
+  const lastStatsLog = useRef(0);
   const [handLabels, setHandLabels] = useState<{ side: string; x: number; y: number; text: string }[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -662,6 +664,20 @@ export function BlockAR() {
       hv.playsInline = true;
       let anyHand = false;
       const rt = new HandSystemRuntime(handCanvas.current, hv, overlayRef.current ?? document.body, (d) => {
+        // Pipeline counters → Dev Test Logs (~every 4 s): the ONLY way to
+        // tell from a phone screenshot WHICH frame-chain link is broken
+        // (frames submitted vs results vs landmarks vs video state).
+        const p = d.pipeline;
+        if (p && performance.now() - lastStatsLog.current > 4000) {
+          lastStatsLog.current = performance.now();
+          deviceTelemetry.log("hand_pipeline_stats", {
+            src: p.frameSource, del: p.workerDelegate, rdy: p.workerReady ? 1 : 0,
+            f: p.framesSubmitted, res: p.resultsReceived, lm: p.resultsWithLandmarks,
+            drop: p.droppedFrames, de: p.detectErrors, bf: p.bitmapFailures, pf: p.playFailures,
+            vid: `${p.videoReadyState}/${p.videoWidth}x${p.videoHeight}${p.videoPaused ? "P" : ""}`,
+            lastResMs: p.msSinceLastResult, lastLmMs: p.msSinceLastLandmark,
+          });
+        }
         const l = d.left.status === "tracking" || d.right.status === "tracking";
         anyHand = l;
         setHandSeen(l);
@@ -955,7 +971,7 @@ export function BlockAR() {
                 )}
                 <div className="font-semibold text-brand-cyan mt-1">Telemetry Events:</div>
                 {deviceTelemetry.getLogs().slice(-15).map((l, idx) => (
-                  <div key={idx} className="text-[9px] text-muted-foreground">[{Math.round(l.timestamp)}ms] {l.event}</div>
+                  <div key={idx} className="text-[9px] text-muted-foreground">[{Math.round(l.timestamp)}ms] {l.event}{l.meta ? ` ${JSON.stringify(l.meta)}` : ""}</div>
                 ))}
               </div>
             </div>

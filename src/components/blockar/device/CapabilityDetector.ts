@@ -35,7 +35,8 @@ export interface DeviceTelemetryLog {
     | "hand_start_runtime"
     | "hand_start_tracking"
     | "hand_start_error"
-    | "hand_start_timeout";
+    | "hand_start_timeout"
+    | "hand_pipeline_stats";
   meta?: Record<string, any> | undefined;
 }
 

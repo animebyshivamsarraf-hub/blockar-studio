@@ -7,6 +7,7 @@ import { GrabController3D } from "../interaction/GrabController3D";
 import { FrameGate } from "./frameGate";
 import { FrameArrivalWatchdog } from "./frameArrival";
 import { MAX_WORKER_RESTARTS, WORKER_INFERENCE_TIMEOUT_MS } from "./workerPolicy";
+import { PipelineStatsTracker, noResultAction, shouldEscalateDetectErrors, type PipelineSnapshot } from "./pipelineStats";
 import type { FrameSource } from "../camera/CameraOwnership";
 
 // WASM and model are bundled locally (public/wasm/, public/models/) —
@@ -20,6 +21,16 @@ export type Side = "left" | "right";
 export type TrackStatus = "not detected" | "tracking" | "lost" | "reacquiring";
 
 export interface HandInfo { status: TrackStatus; pinch: PinchPhase; ratio: number; grabbing: boolean }
+/** Live frame-pipeline evidence, surfaced to the host for the Dev Test Logs. */
+export interface PipelineDiagnostics extends PipelineSnapshot {
+  frameSource: FrameSource;
+  workerDelegate: "GPU" | "CPU";
+  workerReady: boolean;
+  videoReadyState: number;
+  videoWidth: number;
+  videoHeight: number;
+  videoPaused: boolean;
+}
 export interface HandDiagnostics {
   system: SystemState;
   backend: Backend;
@@ -30,6 +41,7 @@ export interface HandDiagnostics {
   fps: number;
   error: string | null;
   labels: { side: Side; x: number; y: number; text: string }[];
+  pipeline?: PipelineDiagnostics;
 }
 
 /**
@@ -152,8 +164,12 @@ export class HandSystemRuntime {
   onCameraStalled: ((reason: string) => void) | null = null;
   /** Fired once when TRACKING on XR frames but no result ever arrives (frames are not being fed). */
   onNoFrames: (() => void) | null = null;
-  /** No-result watchdog for asynchronously fed frame sources (XR raw camera). */
+  /** No-result watchdog for the live frame pipeline (any frame source). */
   private noFrames = new FrameArrivalWatchdog(6000);
+  /** Frame-chain counters: which link is broken must be visible, not silent. */
+  private stats = new PipelineStatsTracker();
+  /** No-result watchdog strikes since the last consumed result. */
+  private noResultStrikes = 0;
   private stallReported = false;
   /** True once the current stall episode has used its one free play() retry. */
   private stallPlayRetried = false;
@@ -263,6 +279,13 @@ export class HandSystemRuntime {
         if (raceTimer) clearTimeout(raceTimer);
       }
       this.set("TRACKING");
+      // Fresh liveness window for the new session: counters start at zero
+      // and the video-stall clock starts NOW — previously it stayed 0 until
+      // the first frame advanced, so a video whose clock never moved was
+      // invisible to checkVideoStall forever.
+      this.stats.reset();
+      this.noResultStrikes = 0;
+      this.lastVideoAdvanceT = performance.now();
       this.armFrameArrival(performance.now());
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -355,7 +378,10 @@ export class HandSystemRuntime {
         new Promise((_, reject) => setTimeout(() => reject(new Error("video.play() timed out")), 5000)),
       ]);
     } catch {
-      // play() failed or timed out — continue anyway; the watchdog will catch a stalled video
+      // play() failed or timed out — counted, not silent: startup continues,
+      // and the stall watchdog (its clock now starts at TRACKING entry) will
+      // retry play() once and then escalate to a camera restore.
+      this.stats.playFailed();
     }
     this.session = "camera live";
     this.set("INITIALIZING");
@@ -446,15 +472,27 @@ export class HandSystemRuntime {
           this.lastResultT = performance.now();
           if (this.workerRestartCount && this.lastResultT - this.lastWorkerRestartT > 30000) this.workerRestartCount = 0;
           this.consumeMediaPipeResult(data.result);
+        } else if (data.type === "DROPPED") {
+          this.stats.dropped();
         } else if (data.type === "RUNTIME_FALLBACK") {
           this.workerDelegate = "CPU";
           this.mpIntervalMs = MP_INTERVAL_CPU_MS;
           this.error = null;
           this.session = `${this.sourceLabel()} · MediaPipe worker · CPU fallback`;
         } else if (data.type === "DETECT_ERROR") {
+          // Previously this only assigned this.error and looped forever:
+          // the system stayed TRACKING, the host never saw it (it reacts
+          // only to system === "ERROR"), and the user sat in "Looking for
+          // hand…" with no evidence. Count it, and after a sustained run
+          // restart the worker — a per-frame detection failure is a wedged
+          // detector, not a "no hand in frame" signal.
+          this.stats.detectError();
           this.error = data.error ?? "MediaPipe worker detection failed";
+          if (shouldEscalateDetectErrors(this.stats.consecutiveErrors) && !this.workerRestarting) {
+            this.stats.clearConsecutiveErrors();
+            this.restartWorker("repeated detection errors");
+          }
         }
-        // DROPPED: slot already freed above; nothing else to do.
       };
       worker.onerror = (event) => {
         event.preventDefault?.();
@@ -474,6 +512,7 @@ export class HandSystemRuntime {
   /** Bounded worker restart. Never blocks the render loop; never leaves a terminal state. */
   private restartWorker(reason: string) {
     if (this.backend !== "MEDIAPIPE" || this.workerRestarting) return;
+    this.stats.workerRestarted();
     const old = this.handWorker;
     this.handWorker = null;
     this.workerReady = false;
@@ -528,21 +567,53 @@ export class HandSystemRuntime {
     return this.frameSource === "xr" ? "XR raw camera" : this.frameSource === "video" ? "camera live" : "paused";
   }
 
-  // ---------- frame arrival watchdog (async-fed sources) ----------
-  /** Arm the no-result watchdog when TRACKING depends on pushed frames (XR). */
+  // ---------- frame arrival watchdog (all live frame sources) ----------
+  /**
+   * Arm the no-result watchdog whenever TRACKING depends on inference
+   * results — DOM video included. Round-1 armed it only for the XR source,
+   * which left the phone's actual path (video fallback) with NO end-to-end
+   * liveness check: a wedged worker, starving bitmaps, or a per-frame
+   * detection failure all presented as one permanent silent "LOST".
+   */
   private armFrameArrival(now: number) {
-    if (this.backend === "MEDIAPIPE" && this.frameSource === "xr") this.noFrames.arm(now);
+    if (this.backend === "MEDIAPIPE" && this.frameSource !== "none") this.noFrames.arm(now);
     else this.noFrames.disarm();
   }
 
-  /** TRACKING but no inference result ever arrived → error + host handoff, never a silent wait. */
+  /** TRACKING but no inference result arrived in the window → recover or surface a real error, never a silent wait. */
   private checkFrameArrival(now: number) {
     if (this.system !== "TRACKING" || !this.noFrames.check(now)) return;
-    this.noFrames.disarm();
-    this.error = "AR camera frames are not reaching hand tracking — switching to rear-camera hand mode";
-    this.session = "no XR frames · handing camera back";
-    this.onNoFrames?.();
-    this.set("ERROR");
+    // A worker (re)start legitimately needs its init window before the
+    // first result can exist — re-arm instead of striking a healthy boot.
+    if (this.handWorker && (!this.workerReady || this.workerRestarting)) { this.noFrames.arm(now); return; }
+    const action = noResultAction(this.frameSource, this.noResultStrikes, !!this.handWorker);
+    if (action === "handoff") {
+      this.noFrames.disarm();
+      this.error = "AR camera frames are not reaching hand tracking — switching to rear-camera hand mode";
+      this.session = "no XR frames · handing camera back";
+      this.onNoFrames?.();
+      this.set("ERROR");
+      return;
+    }
+    if (action === "restart-worker") {
+      this.noResultStrikes++;
+      this.session = "no results from worker · restarting it";
+      this.noFrames.arm(now);
+      this.restartWorker("no results");
+      return;
+    }
+    if (action === "rearm") {
+      this.noResultStrikes++;
+      this.session = "no results yet · watching";
+      this.noFrames.arm(now);
+      return;
+    }
+    if (action === "error") {
+      this.noFrames.disarm();
+      this.error = "Camera is live but hand detection is producing no results — tap Hand to retry. (Dev Test Logs show the pipeline counters.)";
+      this.session = "no results · pipeline stalled";
+      this.set("ERROR");
+    }
   }
 
   // ---------- frame ownership ----------
@@ -550,6 +621,7 @@ export class HandSystemRuntime {
   setFrameSource(src: FrameSource, stream?: MediaStream | null) {
     if (stream !== undefined) this.rebindStream(stream);
     this.frameSource = src;
+    this.noResultStrikes = 0;
     if (this.system === "TRACKING") this.armFrameArrival(performance.now());
     this.gate.reset();
     this.lastVideoTime = -1;
@@ -570,7 +642,7 @@ export class HandSystemRuntime {
     this.externalStream = !!stream;
     if (stream) {
       if (this.video.srcObject !== stream) this.video.srcObject = stream;
-      void this.video.play().catch(() => {});
+      void this.video.play().catch(() => { this.stats.playFailed(); });
     }
   }
 
@@ -593,6 +665,7 @@ export class HandSystemRuntime {
       this.lastSentTimestamp = ts;
       const buf = pixels.buffer as ArrayBuffer;
       this.handWorker!.postMessage({ type: "FRAME", frameId: id, pixels: buf, width, height, timestampMs: ts }, [buf]);
+      this.stats.frameSubmitted();
       return true;
     } catch {
       this.gate.finish(id);
@@ -634,6 +707,7 @@ export class HandSystemRuntime {
     if (this.recoveryTimer != null) { window.clearTimeout(this.recoveryTimer); this.recoveryTimer = null; }
     this.workerReady = false;
     this.gate.reset();
+    this.noResultStrikes = 0;
     this.workerRestarting = false;
     this.workerRestartCount = 0;
     this.workerDelegate = DEFAULT_DELEGATE;
@@ -773,7 +847,7 @@ export class HandSystemRuntime {
     // decoder forever and the camera would never recover.
     if (!ended && this.video.paused && !this.stallPlayRetried) {
       this.stallPlayRetried = true;
-      void this.video.play().catch(() => {});
+      void this.video.play().catch(() => { this.stats.playFailed(); });
       this.lastVideoAdvanceT = now;
       return;
     }
@@ -833,15 +907,18 @@ export class HandSystemRuntime {
         const ts = Math.max(this.lastSentTimestamp + 1, Math.round(now));
         this.lastSentTimestamp = ts;
         worker.postMessage({ type: "FRAME", frameId: id, bitmap, timestampMs: ts }, [bitmap]);
+        this.stats.frameSubmitted();
       } catch {
         try { bitmap.close(); } catch { /* ignore */ }
         this.gate.finish(id);
       }
-    }).catch(() => { this.gate.finish(id); });
+    }).catch(() => { this.stats.bitmapFailed(); this.gate.finish(id); });
   }
 
   private consumeMediaPipeResult(res: any) {
     this.noFrames.fed(performance.now());
+    this.noResultStrikes = 0;
+    this.stats.result(performance.now(), Array.isArray(res?.landmarks) ? res.landmarks.length : 0);
     const W = window.innerWidth, H = window.innerHeight;
     const vw = this.srcW, vh = this.srcH;
     const sc = Math.max(W / vw, H / vh);
@@ -979,6 +1056,20 @@ export class HandSystemRuntime {
     return px < radiusPx * 1.3 + 12;
   }
 
+  /** Live frame-chain evidence: counters + video/worker state, for the Dev Test Logs. */
+  getPipelineStats(now = performance.now()): PipelineDiagnostics {
+    return {
+      ...this.stats.snapshot(now),
+      frameSource: this.frameSource,
+      workerDelegate: this.workerDelegate,
+      workerReady: this.workerReady,
+      videoReadyState: this.video.readyState,
+      videoWidth: this.video.videoWidth,
+      videoHeight: this.video.videoHeight,
+      videoPaused: this.video.paused,
+    };
+  }
+
   private emit(force: boolean, cam: THREE.Camera = this.camera) {
     const now = performance.now();
     if (!force && now - this.lastEmit < 100) return;
@@ -995,6 +1086,7 @@ export class HandSystemRuntime {
     this.onDiag({
       system: this.system, backend: this.backend, left: info(this.hands.left), right: info(this.hands.right),
       gesture: this.gesture, session: this.session, fps: this.fps, error: this.error, labels,
+      pipeline: this.getPipelineStats(now),
     });
   }
 }
