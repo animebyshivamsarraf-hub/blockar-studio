@@ -946,6 +946,14 @@ export function createEngine(o: EngineOpts) {
     },
     view: () => orbit,
     isXR: () => !!xrSession,
+    // This engine build has no WebXR Raw Camera Access reader (no
+    // XRCameraReader): raw camera is honestly "no", so the host takes the
+    // designed rear-camera MediaPipe fallback instead of crashing on a
+    // missing method (startupGuards probe + BlockAR dispatchCamera).
+    rawCameraState: () => "no",
+    // No raw pipeline exists in this build to tear down; the failed state
+    // is already permanent (rawCameraState() === "no").
+    markRawCameraFailed: () => {},
     xrHandCount: () => (xrSession ? Array.from(xrSession.inputSources).filter((s) => !!s.hand).length : 0),
     async stopXR(preserveAnchor = true) {
       preserveAnchorOnEnd = preserveAnchor;
