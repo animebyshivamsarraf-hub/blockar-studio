@@ -5,6 +5,7 @@ import { PinchStateMachine, type PinchPhase } from "./PinchStateMachine";
 import { liftLandmarks, syntheticHand, XR_TO_MP_JOINTS, type ScreenLandmark } from "./landmarkMapping";
 import { GrabController3D } from "../interaction/GrabController3D";
 import { FrameGate } from "./frameGate";
+import { FrameArrivalWatchdog } from "./frameArrival";
 import { MAX_WORKER_RESTARTS, WORKER_INFERENCE_TIMEOUT_MS } from "./workerPolicy";
 import type { FrameSource } from "../camera/CameraOwnership";
 
@@ -41,7 +42,13 @@ export async function isEnvironmentStream(s: MediaStream): Promise<boolean> {
   const settings = t.getSettings?.() ?? {};
   if (settings.facingMode) return settings.facingMode === "environment";
   try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
+    // Bounded: a wedged enumerateDevices (seen on Android after permission
+    // churn) must fail closed ("not confirmed rear") instead of stalling
+    // camera validation forever.
+    const devices = await Promise.race([
+      navigator.mediaDevices.enumerateDevices(),
+      new Promise<MediaDeviceInfo[]>((_, reject) => setTimeout(() => reject(new Error("enumerateDevices timed out")), 3000)),
+    ]);
     const dev = devices.find((d) => d.kind === "videoinput" && d.deviceId === settings.deviceId);
     return !!dev?.label && /back|rear|environment/i.test(dev.label);
   } catch {
@@ -143,6 +150,10 @@ export class HandSystemRuntime {
   private srcH = 480;
   /** Fired when the DOM video stream stalls/ends so the host can reacquire the camera. */
   onCameraStalled: ((reason: string) => void) | null = null;
+  /** Fired once when TRACKING on XR frames but no result ever arrives (frames are not being fed). */
+  onNoFrames: (() => void) | null = null;
+  /** No-result watchdog for asynchronously fed frame sources (XR raw camera). */
+  private noFrames = new FrameArrivalWatchdog(6000);
   private stallReported = false;
   /** True once the current stall episode has used its one free play() retry. */
   private stallPlayRetried = false;
@@ -233,11 +244,26 @@ export class HandSystemRuntime {
         else if (chosen === "mediapipe") await this.startMediaPipe(opts.stream, opts.frameSource ?? "video");
         else this.startDemo();
       })();
-      await Promise.race([
-        startup,
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Hand tracking startup timed out (45s)")), 45000)),
-      ]);
+      // The loser of the race must never surface as an unhandled rejection.
+      startup.catch(() => { /* the timeout path below reports the failure */ });
+      let raceTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          startup,
+          new Promise((_, reject) => { raceTimer = setTimeout(() => reject(new Error("Hand tracking startup timed out (45s)")), 45000); }),
+        ]);
+      } catch (e) {
+        // Cooperative abort: invalidate the still-running startup so it
+        // stops at its next generation checkpoint instead of mutating a
+        // runtime that is about to be torn down (stream, landmarker,
+        // worker handlers all key off mpGeneration).
+        this.mpGeneration++;
+        throw e;
+      } finally {
+        if (raceTimer) clearTimeout(raceTimer);
+      }
       this.set("TRACKING");
+      this.armFrameArrival(performance.now());
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       this.error = msg;
@@ -290,6 +316,7 @@ export class HandSystemRuntime {
       this.workerRestartCount = 0;
       this.mpIntervalMs = MP_INTERVAL_CPU_MS;
       await this.startMediaPipeWorker(generation);
+      if (generation !== this.mpGeneration) throw new Error("Hand tracking startup superseded");
       this.resetCube();
       return;
     }
@@ -342,6 +369,7 @@ export class HandSystemRuntime {
     if (isPhone) {
       this.mpIntervalMs = MP_INTERVAL_CPU_MS;
       await this.startMediaPipeWorker(generation);
+      if (generation !== this.mpGeneration) throw new Error("Hand tracking startup superseded");
       this.resetCube();
       return;
     }
@@ -371,7 +399,14 @@ export class HandSystemRuntime {
       }
     })();
     const timeout = new Promise<never>((_, r) => setTimeout(() => r(new Error("MediaPipe model load timed out (20s) — check network")), 20000));
-    this.landmarker = await Promise.race([init, timeout]);
+    const created = await Promise.race([init, timeout]);
+    if (generation !== this.mpGeneration) {
+      // Startup was aborted (overall timeout / teardown) while the model
+      // loaded: never resurrect a landmarker on a torn-down runtime.
+      try { created.close(); } catch { /* ignore */ }
+      throw new Error("Hand tracking startup superseded");
+    }
+    this.landmarker = created;
     this.resetCube();
   }
 
@@ -489,11 +524,29 @@ export class HandSystemRuntime {
     return this.frameSource === "xr" ? "XR raw camera" : this.frameSource === "video" ? "camera live" : "paused";
   }
 
+  // ---------- frame arrival watchdog (async-fed sources) ----------
+  /** Arm the no-result watchdog when TRACKING depends on pushed frames (XR). */
+  private armFrameArrival(now: number) {
+    if (this.backend === "MEDIAPIPE" && this.frameSource === "xr") this.noFrames.arm(now);
+    else this.noFrames.disarm();
+  }
+
+  /** TRACKING but no inference result ever arrived → error + host handoff, never a silent wait. */
+  private checkFrameArrival(now: number) {
+    if (this.system !== "TRACKING" || !this.noFrames.check(now)) return;
+    this.noFrames.disarm();
+    this.error = "AR camera frames are not reaching hand tracking — switching to rear-camera hand mode";
+    this.session = "no XR frames · handing camera back";
+    this.onNoFrames?.();
+    this.set("ERROR");
+  }
+
   // ---------- frame ownership ----------
   /** Switch frame producer. Resets stale timestamps / in-flight frames. */
   setFrameSource(src: FrameSource, stream?: MediaStream | null) {
     if (stream !== undefined) this.rebindStream(stream);
     this.frameSource = src;
+    if (this.system === "TRACKING") this.armFrameArrival(performance.now());
     this.gate.reset();
     this.lastVideoTime = -1;
     this.lastVideoAdvanceT = performance.now();
@@ -556,7 +609,12 @@ export class HandSystemRuntime {
   private async teardown() {
     this.mpGeneration++;
     const s = this.xrSession; this.xrSession = null;
-    if (s) { try { await s.end(); } catch { /* already ended */ } }
+    if (s) {
+      // A wedged session.end() must not hang stop()/start() — cap the wait;
+      // the session's own 'end' event completes the teardown asynchronously.
+      try { await Promise.race([s.end(), new Promise<void>((r) => setTimeout(r, 3000))]); } catch { /* already ended */ }
+    }
+    this.noFrames.disarm();
     const keepExternalVideo = this.externalStream;
     if (!keepExternalVideo) this.stream?.getTracks().forEach((t) => t.stop());
     this.externalStream = false;
@@ -645,6 +703,7 @@ export class HandSystemRuntime {
     if (this.system === "TRACKING" || this.system === "ERROR") this.checkVideoStall(now);
     if (this.system === "TRACKING") {
       this.checkWorkerWatchdog(now);
+      this.checkFrameArrival(now);
       if (this.backend === "WEBXR" && xrFrame) this.sampleXR(xrFrame, samples);
       else if (this.backend === "MEDIAPIPE") this.sampleMediaPipe(now, samples);
       else if (this.backend === "DEMO") this.sampleDemo(samples);
@@ -778,6 +837,7 @@ export class HandSystemRuntime {
   }
 
   private consumeMediaPipeResult(res: any) {
+    this.noFrames.fed(performance.now());
     const W = window.innerWidth, H = window.innerHeight;
     const vw = this.srcW, vh = this.srcH;
     const sc = Math.max(W / vw, H / vh);

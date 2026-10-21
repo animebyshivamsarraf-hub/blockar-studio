@@ -9,7 +9,7 @@ import { aiBuild } from "@/lib/ai-build.functions";
 import { cameraReducer, frameSourceFor, handsPausedByXR, initialCameraState, needsFreshStream, xrHandoffAction, type CameraEvent, type CameraState } from "./camera/CameraOwnership";
 import { RawFrameWatchdog } from "./camera/RawFrameWatchdog";
 import { FrameProgressTracker } from "./camera/frameStall";
-import { resolveXRHandoff, settleWithin } from "./hand/startupGuards";
+import { resolveXRHandoff, settleWithin, startStartupDeadline } from "./hand/startupGuards";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 import { Sparkles, Loader2, X, Spline, Play, Square, ArrowUp, ArrowDown, Repeat, Eye, Wand2 } from "lucide-react";
@@ -77,6 +77,18 @@ export function BlockAR() {
   const [camOwner, setCamOwner] = useState<CameraState>(initialCameraState);
   const camState = useRef<CameraState>(initialCameraState);
   const [rawPending, setRawPending] = useState(false);
+  const [xrLive, setXrLive] = useState(false);
+  // The camera pill must reflect the engine's REAL XR state even if an
+  // onXRStateChange event is ever missed or arrives out of order: resync
+  // directly from the engine on an interval (no rerender when unchanged).
+  useEffect(() => {
+    if (stage !== "build") return;
+    const id = window.setInterval(() => {
+      const live = engine.current?.isXR() ?? false;
+      setXrLive((prev) => (prev === live ? prev : live));
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [stage]);
   const lastStatusUpdate = useRef<number>(0);
   const pendingStatus = useRef<string | null>(null);
 
@@ -520,6 +532,14 @@ export function BlockAR() {
   useEffect(() => { engine.current?.setScale(1); }, [size, stage]);
   useEffect(() => () => stopHands.current?.(), []);
 
+  // One overall deadline per hand-start attempt. Per-step timeouts stack
+  // (≈69 s worst case in XR mode) and none of them covers code that runs
+  // outside a try/catch — this deadline guarantees startup ALWAYS reaches a
+  // terminal state (TRACKING or a retryable ERROR) instead of sitting at
+  // STARTING with the hand button disabled.
+  const HAND_START_DEADLINE_MS = 75000;
+  const handAttempt = useRef(0);
+
   async function toggleHands() {
     if (hand === "starting" || hand === "initializing") return;
 
@@ -539,10 +559,30 @@ export function BlockAR() {
       return;
     }
 
+    // A previous runtime may have errored on its own (worker cooldown, frame
+    // watchdog): dispose it first — never stack two runtimes on one canvas.
+    if (stopHands.current) { stopHands.current(); stopHands.current = null; }
+
+    const attempt = ++handAttempt.current;
+    const stillCurrent = () => handAttempt.current === attempt;
     setHand("starting");
     setHandError(null);
+    deviceTelemetry.log("hand_start_begin");
+    const deadline = startStartupDeadline(HAND_START_DEADLINE_MS, () => {
+      if (!stillCurrent()) return;
+      if (handRef.current !== "starting" && handRef.current !== "initializing") return;
+      handAttempt.current++; // invalidate the still-running attempt body
+      deviceTelemetry.log("hand_start_timeout");
+      stopHands.current?.(); stopHands.current = null;
+      const reason = "Hand startup timed out — dobara Hand dabao";
+      setHand("error");
+      setHandError(reason);
+      setDebouncedHandStatus("lost");
+      setToast(`Error: ${reason}`);
+    });
     const e0 = engine.current;
 
+    try {
     // Primary: WebXR — only when the session really exposes native hand joints (headsets).
     if (e0?.isXR() && e0.xrHandCount() > 0) {
       setBackendType("WEBXR HANDS");
@@ -551,6 +591,8 @@ export function BlockAR() {
       setHand("on");
       setGuide(false);
       setToast("Backend: WEBXR HANDS active · pinch to build");
+      deadline.cancel();
+      deviceTelemetry.log("hand_start_tracking", { backend: "webxr" });
       return;
     }
 
@@ -569,18 +611,14 @@ export function BlockAR() {
       const handoff = await resolveXRHandoff(e0, {
         onSwitching: () => setToast("This phone can't share the AR camera — switching to rear-camera hand mode (build stays anchored)"),
       });
+      deviceTelemetry.log("hand_start_handoff", { kind: handoff.kind });
+      if (!stillCurrent()) { deadline.cancel(); return; }
       if (handoff.kind === "stuck") {
-        const reason = "AR session band nahi ho raha — AR se bahar aakar Hand dobara dabao";
-        setHand("error");
-        setHandError(reason);
-        setDebouncedHandStatus("lost");
-        setToast(`Error: ${reason}`);
-        return;
+        throw new Error("AR session band nahi ho raha — AR se bahar aakar Hand dobara dabao");
       }
       xrRaw = handoff.kind === "raw";
       leftXR = handoff.kind === "exited" && handoff.stoppedByUs;
     }
-    try {
       let activeStream = streamRef.current;
       const track = activeStream?.getVideoTracks()[0];
       const streamLive = !leftXR && camOk && !needsFreshStream("restore", track);
@@ -596,6 +634,8 @@ export function BlockAR() {
         if (!activeStream) throw new Error("Camera could not be activated");
       }
       if (!activeStream && !xrRaw) throw new Error("Camera could not be activated");
+      if (!stillCurrent()) { deadline.cancel(); return; }
+      deviceTelemetry.log("hand_start_camera", { frameSource: xrRaw ? "xr" : "video" });
       if (!handCanvas.current) throw new Error("Hand layer not mounted");
       const hv = videoRef.current;
       if (!hv) throw new Error("Rear camera video layer not mounted");
@@ -638,15 +678,31 @@ export function BlockAR() {
         engine.current?.handLost();
         void restoreVideoPipeline("stalled");
       };
+      rt.onNoFrames = () => {
+        // The worker is alive but XR frames never arrive: hand the camera
+        // back through the normal ownership handoff (raw failed → exit XR →
+        // rear-camera hand mode) instead of waiting forever in TRACKING.
+        engine.current?.markRawCameraFailed();
+      };
       rt.onOwnerLost = () => {
         engine.current?.handLost();
         setPinch(false);
       };
       handRuntime.current = rt;
       stopHands.current = () => { rt.dispose(); handRuntime.current = null; setHandLabels([]); engine.current?.handLost(); };
+      deviceTelemetry.log("hand_start_runtime", { frameSource: xrRaw ? "xr" : "video" });
       await rt.start("mediapipe", xrRaw ? { frameSource: "xr" } : { stream: activeStream! });
+      if (!stillCurrent()) {
+        // The overall deadline already errored this attempt and disposed
+        // the runtime: don't resurrect it into a live hand session.
+        if (handRuntime.current === rt) { stopHands.current?.(); stopHands.current = null; }
+        deadline.cancel();
+        return;
+      }
       if (rt.getSystem() !== "TRACKING") throw new Error(rt.getError() || "Hand tracking failed to start");
       dispatchCamera({ type: "HANDS_ON" });
+      deadline.cancel();
+      deviceTelemetry.log("hand_start_tracking", { backend: "mediapipe" });
       setHand("on");
       setGuide(false);
       setToast(engine.current?.isXR()
@@ -654,8 +710,11 @@ export function BlockAR() {
         : "Hand Control on · show your hand to the camera");
 
     } catch (err: any) {
+      deadline.cancel();
+      if (!stillCurrent()) return; // the deadline already reported this attempt
       stopHands.current?.(); stopHands.current = null;
       const reason = err?.message || "Hand tracking initialization failed";
+      deviceTelemetry.log("hand_start_error", { reason });
       setHand("error");
       setHandError(reason);
       setDebouncedHandStatus("lost");
@@ -841,8 +900,8 @@ export function BlockAR() {
                 <Camera className="h-4 w-4" />
                 {/* camOk only tracks the DOM stream; during AR the camera is live
                     through the XR session, so "Camera off" would be a lie. */}
-                <span>{camOk ? "Back camera" : camOwner.xr ? "AR camera" : "Camera off"}</span>
-                <span className={cn("h-2 w-2 rounded-full", camOk || camOwner.xr ? "bg-success" : "bg-muted-foreground")} />
+                <span>{camOk ? "Back camera" : camOwner.xr || xrLive ? "AR camera" : "Camera off"}</span>
+                <span className={cn("h-2 w-2 rounded-full", camOk || camOwner.xr || xrLive ? "bg-success" : "bg-muted-foreground")} />
               </div>
               {xrOk && !engine.current?.isXR() && (
                 <button onClick={enterXR} className="pointer-events-auto rounded-xl bg-success px-3 py-2 text-xs font-semibold text-background">Start WebXR AR</button>

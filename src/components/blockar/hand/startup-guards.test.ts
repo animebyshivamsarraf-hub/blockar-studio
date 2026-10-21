@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveXRHandoff, settleWithin, type XRHandoffEngine } from "./startupGuards";
+import { resolveXRHandoff, settleWithin, startStartupDeadline, isStaleSessionEnd, type XRHandoffEngine } from "./startupGuards";
 
 /**
  * Regression tests for the LIVE phone bug (2026-10-20, build f40f05c):
@@ -98,5 +98,77 @@ describe("resolveXRHandoff", () => {
     const out = await resolveXRHandoff(engine, { sleep });
     expect(out).toEqual({ kind: "exited", stoppedByUs: false });
     expect(engine.stopXR).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Regression tests for the SECOND phone failure (2026-10-21, build 9371c01):
+ * startup STILL stuck at STARTING despite the bounded handoff. Per-step
+ * timeouts stack to ~69 s and the handoff await sat OUTSIDE toggleHands'
+ * try/catch, so one unmodelled hang/rejection stranded the UI forever.
+ * The overall deadline + attempt token guarantee a terminal state.
+ */
+describe("startStartupDeadline", () => {
+  function fakeTimers() {
+    const pending = new Map<number, () => void>();
+    let nextId = 1;
+    return {
+      timers: {
+        setTimeout: (fn: () => void, _ms: number) => { const id = nextId++; pending.set(id, fn); return id; },
+        clearTimeout: (id: unknown) => { pending.delete(id as number); },
+      },
+      fireAll() { const fns = [...pending.values()]; pending.clear(); fns.forEach((f) => f()); },
+      get pendingCount() { return pending.size; },
+    };
+  }
+
+  it("fires onTimeout exactly once when the deadline elapses", () => {
+    const t = fakeTimers();
+    const onTimeout = vi.fn();
+    const d = startStartupDeadline(75000, onTimeout, t.timers);
+    expect(d.fired).toBe(false);
+    t.fireAll();
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(d.fired).toBe(true);
+    t.fireAll(); // nothing left scheduled — must not fire again
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancel() before the deadline prevents firing", () => {
+    const t = fakeTimers();
+    const onTimeout = vi.fn();
+    const d = startStartupDeadline(75000, onTimeout, t.timers);
+    d.cancel();
+    expect(t.pendingCount).toBe(0);
+    t.fireAll();
+    expect(onTimeout).not.toHaveBeenCalled();
+    expect(d.fired).toBe(false);
+  });
+
+  it("cancel() after firing is a harmless no-op", () => {
+    const t = fakeTimers();
+    const onTimeout = vi.fn();
+    const d = startStartupDeadline(75000, onTimeout, t.timers);
+    t.fireAll();
+    d.cancel();
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(d.fired).toBe(true);
+  });
+});
+
+describe("isStaleSessionEnd", () => {
+  it("a different session ending is stale (must be ignored)", () => {
+    const live = { id: 2 };
+    const old = { id: 1 };
+    expect(isStaleSessionEnd(live, old)).toBe(true);
+  });
+
+  it("the current session ending is not stale", () => {
+    const live = { id: 1 };
+    expect(isStaleSessionEnd(live, live)).toBe(false);
+  });
+
+  it("an end with no current session is stale (already torn down)", () => {
+    expect(isStaleSessionEnd(null, { id: 1 })).toBe(true);
   });
 });

@@ -28,7 +28,14 @@ export interface DeviceTelemetryLog {
     | "grab_released"
     | "hand_lost"
     | "hand_reacquired"
-    | "fallback_selected";
+    | "fallback_selected"
+    | "hand_start_begin"
+    | "hand_start_handoff"
+    | "hand_start_camera"
+    | "hand_start_runtime"
+    | "hand_start_tracking"
+    | "hand_start_error"
+    | "hand_start_timeout";
   meta?: Record<string, any> | undefined;
 }
 

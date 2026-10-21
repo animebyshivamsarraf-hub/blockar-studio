@@ -60,6 +60,67 @@ export interface XRHandoffOptions {
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+export interface StartupDeadline {
+  /** Prevent the timeout from firing. Safe to call any number of times. */
+  cancel(): void;
+  /** True once the timeout has fired. */
+  readonly fired: boolean;
+}
+
+export interface StartupDeadlineTimers {
+  setTimeout: (fn: () => void, ms: number) => unknown;
+  clearTimeout: (id: unknown) => void;
+}
+
+const defaultTimers: StartupDeadlineTimers = {
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (id) => clearTimeout(id as ReturnType<typeof setTimeout>),
+};
+
+/**
+ * One overall deadline for a whole multi-step startup operation.
+ *
+ * Per-step timeouts are not enough: they stack (XR handoff + camera +
+ * runtime init ≈ 69 s of legitimate "starting"), and any step that rejects
+ * OUTSIDE a caller's try/catch strands the UI state machine forever. The
+ * host arms one deadline when startup begins; if it fires, the host forces
+ * a terminal, retryable error state. Fires at most once; cancel() after
+ * firing is a no-op.
+ */
+export function startStartupDeadline(
+  ms: number,
+  onTimeout: () => void,
+  timers: StartupDeadlineTimers = defaultTimers,
+): StartupDeadline {
+  let fired = false;
+  let cancelled = false;
+  const id = timers.setTimeout(() => {
+    if (cancelled || fired) return;
+    fired = true;
+    onTimeout();
+  }, ms);
+  return {
+    cancel() {
+      if (fired || cancelled) return;
+      cancelled = true;
+      timers.clearTimeout(id);
+    },
+    get fired() { return fired; },
+  };
+}
+
+/**
+ * True when an XRSession 'end' event belongs to a session that is no
+ * longer the engine's current session. A superseded session's late 'end'
+ * must be ignored: treating it as current would report "XR ended" (and
+ * tear down shared state) while the replacement session is still
+ * presenting — the mechanism behind a "Camera off" pill over a live AR
+ * feed after enterXR's retry path runs two sessions back to back.
+ */
+export function isStaleSessionEnd(current: unknown, ending: unknown): boolean {
+  return current !== ending;
+}
+
 /**
  * Decide how hand startup proceeds while an AR session may be active.
  *
