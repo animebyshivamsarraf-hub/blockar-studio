@@ -747,14 +747,33 @@ export function createEngine(o: EngineOpts) {
     return null;
   }
 
-  // Sink for external raw camera consumers (BlockAR / MediaPipe hand tracking).
-  // In this build without XRCameraReader, rawCameraState() is always "no", so
-  // no frames are pushed. Storing the sink fulfills the API contract honestly.
+  // ── Raw XR camera: NOT SUPPORTED in this engine build ──────────────────
+  // This engine has no XRCameraReader, so nothing here ever produces raw
+  // camera frames. rawCameraState() therefore reports "no" permanently and
+  // the SUPPORTED hand-tracking path is the host's rear-camera MediaPipe
+  // fallback (XR exit → one DOM stream → worker). The sink below is stored
+  // only so a host that installs one never crashes; nothing ever pushes
+  // into it, no host path waits on it (frameSource "xr" is unreachable
+  // while rawCameraState() is "no"), and markRawCameraFailed() is a no-op
+  // because there is no raw pipeline to tear down. Do not turn these into
+  // a fake frame producer — a real raw mode requires a real reader.
   let xrCameraSink: null | { want: (now: number) => boolean; push: (px: Uint8Array, w: number, h: number, now: number) => void } = null;
 
   async function startXR(overlay: HTMLElement) {
     const xr = (navigator as Navigator & { xr?: XRSystem }).xr;
     if (!xr) throw new Error("WebXR not available");
+    // REPAIR (2026-10-21): a retry after a half-failed start (the host's
+    // enterXR catch path calls startXR twice) must never leave TWO
+    // immersive sessions alive — a leaked session keeps the camera and
+    // silently breaks the DOM-camera fallback. End the tracked previous
+    // session first. If that start had completed, its 'end' listener sees
+    // xrSession === null and treats the end as stale (ignored by design);
+    // the host still gets active:true from the new session below.
+    if (xrSession) {
+      const staleSession = xrSession;
+      xrSession = null;
+      try { staleSession.end().catch(() => {}); } catch { /* already ended */ }
+    }
     const session = await xr.requestSession("immersive-ar", {
       requiredFeatures: ["hit-test"],
       optionalFeatures: ["dom-overlay", "anchors", "hand-tracking", "local-floor"],
