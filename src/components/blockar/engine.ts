@@ -7,6 +7,7 @@ import { GrabController3D } from "./interaction/GrabController3D";
 import { deviceTelemetry } from "./device/CapabilityDetector";
 import { createCoaster } from "./coaster";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { isStaleSessionEnd } from "./hand/startupGuards";
 
 export const VOXEL = 0.1; // 10 cm
 export type Shape = "cube" | "sphere" | "cylinder" | "pyramid";
@@ -802,6 +803,11 @@ export function createEngine(o: EngineOpts) {
       if (mode === "track" && h.add) coaster.addPoint(...h.add); else if (mode === "build" && h.add) place(h.add); else if (mode !== "build") applyTool(h);
     });
     session.addEventListener("end", () => {
+      // A superseded session's late 'end' (enterXR retry runs two sessions
+      // back to back; Chrome ends the first when the second starts) must not
+      // tear down the LIVE session's state or report "XR ended" to the host
+      // while the replacement session is still presenting.
+      if (isStaleSessionEnd(xrSession, session)) return;
       hitSource = null; xrSession = null; xrReferenceSpace = null;
       xrHandSeen = false; xrHandFrozen = false; xrLastLocal = null; handWasPinching = false;
       if (pinchMarker) pinchMarker.visible = false;
