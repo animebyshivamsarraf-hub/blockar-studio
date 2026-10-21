@@ -446,6 +446,23 @@ export function BlockAR() {
     setCamErr(null);
     debugCamLog("allowCamera: requesting getUserMedia");
     try {
+      // Exactly ONE camera stream may exist. A healthy stream that the
+      // preview is already showing is reused as-is (re-opening would leak
+      // the old stream's tracks and can make Android refuse the second
+      // getUserMedia call); a dead/muted leftover is stopped BEFORE a fresh
+      // stream is requested, mirroring restoreVideoPipeline.
+      const prevStream = streamRef.current;
+      const prevTrack = prevStream?.getVideoTracks()[0];
+      if (prevStream && prevTrack?.readyState === "live" && !prevTrack.muted && videoRef.current?.srcObject === prevStream) {
+        debugCamLog("allowCamera: reusing healthy stream", prevStream.id);
+        setCamOk(true);
+        setStage("build");
+        return prevStream;
+      }
+      if (prevStream) {
+        prevStream.getTracks().forEach((t) => t.stop());
+        if (streamRef.current === prevStream) streamRef.current = null;
+      }
       let s: MediaStream;
       try {
         s = await navigator.mediaDevices.getUserMedia({ video: {
@@ -937,7 +954,7 @@ export function BlockAR() {
                   <div className="text-amber-400">{FALLBACK_LIMITATION}</div>
                 )}
                 <div className="font-semibold text-brand-cyan mt-1">Telemetry Events:</div>
-                {deviceTelemetry.getLogs().slice(-5).map((l, idx) => (
+                {deviceTelemetry.getLogs().slice(-15).map((l, idx) => (
                   <div key={idx} className="text-[9px] text-muted-foreground">[{Math.round(l.timestamp)}ms] {l.event}</div>
                 ))}
               </div>

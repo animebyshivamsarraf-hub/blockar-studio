@@ -418,7 +418,11 @@ export class HandSystemRuntime {
     this.gate.reset();
 
     const ready = new Promise<void>((resolve, reject) => {
-      const timer = window.setTimeout(() => reject(new Error("MediaPipe worker timed out (20s) — check network")), 20000);
+      // First load on a phone downloads ~19 MB (7.8 MB model + WASM) before
+      // READY; 20 s was too tight on mobile networks and produced a spurious
+      // "timed out" ERROR. 40 s stays inside the 45 s startup race in start()
+      // and the host's 75 s hand-start deadline, so startup remains bounded.
+      const timer = window.setTimeout(() => reject(new Error("MediaPipe worker timed out (40s) — check network")), 40000);
       worker.onmessage = (event: MessageEvent) => {
         const data = event.data ?? {};
         // Ignore anything from a superseded worker or session generation.
