@@ -25,6 +25,8 @@ export interface EngineOpts {
   getColor: () => string;
   onChange: (info: { count: number; canUndo: boolean; canRedo: boolean }) => void;
   onHint: (h: string) => void;
+  /** XR session started (rawCamera = WebXR Raw Camera Access usable) or ended. */
+  onXRStateChange?: (s: { active: boolean; rawCamera: boolean; pending?: boolean }) => void;
   onHandStatus?: (status: "tracking" | "pinching" | "grabbing" | "lost" | "frozen" | "reacquiring", details?: any) => void;
   onXREnd?: () => void;
 }
@@ -745,6 +747,10 @@ export function createEngine(o: EngineOpts) {
     return null;
   }
 
+  // Sink for external raw camera consumers (BlockAR / MediaPipe hand tracking).
+  // In this build without XRCameraReader, rawCameraState() is always "no", so
+  // no frames are pushed. Storing the sink fulfills the API contract honestly.
+  let xrCameraSink: null | { want: (now: number) => boolean; push: (px: Uint8Array, w: number, h: number, now: number) => void } = null;
 
   async function startXR(overlay: HTMLElement) {
     const xr = (navigator as Navigator & { xr?: XRSystem }).xr;
@@ -764,6 +770,7 @@ export function createEngine(o: EngineOpts) {
       ?? await session.requestReferenceSpace("local-floor").catch(() => session.requestReferenceSpace("local"));
     const viewer = await session.requestReferenceSpace("viewer");
     hitSource = (await session.requestHitTestSource?.({ space: viewer })) ?? null;
+    try { o.onXRStateChange?.({ active: true, rawCamera: false, pending: false }); } catch { /* host errors never break XR */ }
     grid.visible = false; anchored = false;
     session.addEventListener("select", () => {
       if (!reticle.visible) return;
@@ -808,6 +815,8 @@ export function createEngine(o: EngineOpts) {
       // tear down the LIVE session's state or report "XR ended" to the host
       // while the replacement session is still presenting.
       if (isStaleSessionEnd(xrSession, session)) return;
+      xrCameraSink = null;
+      try { o.onXRStateChange?.({ active: false, rawCamera: false }); } catch { /* host errors never break XR teardown */ }
       hitSource = null; xrSession = null; xrReferenceSpace = null;
       xrHandSeen = false; xrHandFrozen = false; xrLastLocal = null; handWasPinching = false;
       if (pinchMarker) pinchMarker.visible = false;
@@ -954,6 +963,9 @@ export function createEngine(o: EngineOpts) {
     // No raw pipeline exists in this build to tear down; the failed state
     // is already permanent (rawCameraState() === "no").
     markRawCameraFailed: () => {},
+    // Store camera sink from host. In this build without XRCameraReader,
+    // raw camera is "no", so no frames are pushed.
+    setXRCameraSink(sink: typeof xrCameraSink) { xrCameraSink = sink; },
     xrHandCount: () => (xrSession ? Array.from(xrSession.inputSources).filter((s) => !!s.hand).length : 0),
     async stopXR(preserveAnchor = true) {
       preserveAnchorOnEnd = preserveAnchor;
