@@ -9,6 +9,7 @@ import { aiBuild } from "@/lib/ai-build.functions";
 import { cameraReducer, frameSourceFor, handsPausedByXR, initialCameraState, needsFreshStream, xrHandoffAction, type CameraEvent, type CameraState } from "./camera/CameraOwnership";
 import { RawFrameWatchdog } from "./camera/RawFrameWatchdog";
 import { FrameProgressTracker } from "./camera/frameStall";
+import { resolveXRHandoff, settleWithin } from "./hand/startupGuards";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 import { Sparkles, Loader2, X, Spline, Play, Square, ArrowUp, ArrowDown, Repeat, Eye, Wand2 } from "lucide-react";
@@ -562,15 +563,22 @@ export function BlockAR() {
     let xrRaw = false;
     let leftXR = false;
     if (e0?.isXR()) {
-      for (let i = 0; i < 25 && e0.isXR() && e0.rawCameraState() === "pending"; i++) await sleep(100);
-      xrRaw = e0.isXR() && e0.rawCameraState() === "yes";
-      if (e0.isXR() && !xrRaw) {
-        setToast("This phone can't share the AR camera — switching to rear-camera hand mode (build stays anchored)");
-        await e0.stopXR(true);
-        for (let i = 0; i < 30 && e0.isXR(); i++) await sleep(100);
-        await sleep(350); // let Android release the camera from the AR session
-        leftXR = true;
+      // Bounded XR handoff: the old code awaited stopXR() with no timeout, so a
+      // wedged XRSession.end() promise hung startup at STARTING forever (and
+      // the hand button is disabled while starting, so no retry was possible).
+      const handoff = await resolveXRHandoff(e0, {
+        onSwitching: () => setToast("This phone can't share the AR camera — switching to rear-camera hand mode (build stays anchored)"),
+      });
+      if (handoff.kind === "stuck") {
+        const reason = "AR session band nahi ho raha — AR se bahar aakar Hand dobara dabao";
+        setHand("error");
+        setHandError(reason);
+        setDebouncedHandStatus("lost");
+        setToast(`Error: ${reason}`);
+        return;
       }
+      xrRaw = handoff.kind === "raw";
+      leftXR = handoff.kind === "exited" && handoff.stoppedByUs;
     }
     try {
       let activeStream = streamRef.current;
@@ -581,7 +589,10 @@ export function BlockAR() {
       } else if (!streamLive) {
         if (leftXR) { activeStream?.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
         setToast("Requesting camera for hand tracking…");
-        activeStream = await allowCamera().catch(() => null);
+        // Bounded: a getUserMedia that never answers (camera still wedged by
+        // the just-ended AR session) must fail startup, not hang it.
+        const camOutcome = await settleWithin(allowCamera().catch(() => null), 15000);
+        activeStream = camOutcome.settled ? camOutcome.value : null;
         if (!activeStream) throw new Error("Camera could not be activated");
       }
       if (!activeStream && !xrRaw) throw new Error("Camera could not be activated");
@@ -828,8 +839,10 @@ export function BlockAR() {
             <div className="flex flex-col items-end gap-2">
               <div className="hud flex items-center gap-2 px-3 py-2 text-xs">
                 <Camera className="h-4 w-4" />
-                <span>{camOk ? "Back camera" : "Camera off"}</span>
-                <span className={cn("h-2 w-2 rounded-full", camOk ? "bg-success" : "bg-muted-foreground")} />
+                {/* camOk only tracks the DOM stream; during AR the camera is live
+                    through the XR session, so "Camera off" would be a lie. */}
+                <span>{camOk ? "Back camera" : camOwner.xr ? "AR camera" : "Camera off"}</span>
+                <span className={cn("h-2 w-2 rounded-full", camOk || camOwner.xr ? "bg-success" : "bg-muted-foreground")} />
               </div>
               {xrOk && !engine.current?.isXR() && (
                 <button onClick={enterXR} className="pointer-events-auto rounded-xl bg-success px-3 py-2 text-xs font-semibold text-background">Start WebXR AR</button>

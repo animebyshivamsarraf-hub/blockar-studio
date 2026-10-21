@@ -1,0 +1,102 @@
+import { describe, expect, it, vi } from "vitest";
+import { resolveXRHandoff, settleWithin, type XRHandoffEngine } from "./startupGuards";
+
+/**
+ * Regression tests for the LIVE phone bug (2026-10-20, build f40f05c):
+ * with AR active, tapping Hand left the UI at "HAND: STARTING — MEDIAPIPE
+ * FALLBACK — Please wait…" forever and pinch never worked.
+ *
+ * Root cause: toggleHands awaited engine.stopXR() — i.e. XRSession.end() —
+ * with NO timeout. On Android Chrome that promise can wedge while the
+ * session is presenting; every later startup step (and the whole MediaPipe
+ * worker path) sat behind it, and the hand button is disabled while
+ * starting, so the user could not even retry.
+ *
+ * These tests pin the bounded behavior of resolveXRHandoff/settleWithin:
+ * every path must settle — progress or an honest "stuck" — never a hang.
+ */
+
+const immediateSleep = () => Promise.resolve();
+
+function fakeEngine(state: { xr: boolean; raw: "pending" | "yes" | "no" }, stopXR: () => Promise<void>) {
+  const engine: XRHandoffEngine & { stopXR: ReturnType<typeof vi.fn> } = {
+    isXR: () => state.xr,
+    rawCameraState: () => state.raw,
+    stopXR: vi.fn(stopXR),
+  };
+  return engine;
+}
+
+describe("settleWithin", () => {
+  it("resolves with the value when the promise settles in time", async () => {
+    const out = await settleWithin(Promise.resolve(42), 1000);
+    expect(out).toEqual({ settled: true, value: 42 });
+  });
+
+  it("resolves { settled: false } when the promise never settles", async () => {
+    const out = await settleWithin(new Promise<number>(() => {}), 30);
+    expect(out).toEqual({ settled: false });
+  });
+
+  it("propagates rejections instead of swallowing them", async () => {
+    await expect(settleWithin(Promise.reject(new Error("boom")), 1000)).rejects.toThrow("boom");
+  });
+});
+
+describe("resolveXRHandoff", () => {
+  it("no XR session → none, stopXR untouched", async () => {
+    const engine = fakeEngine({ xr: false, raw: "no" }, () => Promise.resolve());
+    const out = await resolveXRHandoff(engine, { sleep: immediateSleep });
+    expect(out).toEqual({ kind: "none" });
+    expect(engine.stopXR).not.toHaveBeenCalled();
+  });
+
+  it("raw camera becomes available during probe → raw, AR stays on", async () => {
+    const state: { xr: boolean; raw: "pending" | "yes" | "no" } = { xr: true, raw: "pending" };
+    const engine = fakeEngine(state, () => Promise.resolve());
+    let polls = 0;
+    const sleep = () => { polls++; if (polls >= 2) state.raw = "yes"; return Promise.resolve(); };
+    const out = await resolveXRHandoff(engine, { sleep });
+    expect(out).toEqual({ kind: "raw" });
+    expect(engine.stopXR).not.toHaveBeenCalled();
+  });
+
+  it("no raw camera, stopXR ends the session → exited (stoppedByUs)", async () => {
+    const state = { xr: true, raw: "no" as const };
+    const engine = fakeEngine(state, () => { state.xr = false; return Promise.resolve(); });
+    const onSwitching = vi.fn();
+    const out = await resolveXRHandoff(engine, { sleep: immediateSleep, onSwitching });
+    expect(out).toEqual({ kind: "exited", stoppedByUs: true });
+    expect(engine.stopXR).toHaveBeenCalledTimes(1);
+    expect(engine.stopXR).toHaveBeenCalledWith(true);
+    expect(onSwitching).toHaveBeenCalledTimes(1);
+  });
+
+  it("stopXR promise hangs but session ends during exit poll → exited, not stuck", async () => {
+    const state = { xr: true, raw: "no" as const };
+    // XRSession.end() never resolves, yet the 'end' event lands a bit later —
+    // exactly the wedged-promise case from the phone. Startup must proceed.
+    const engine = fakeEngine(state, () => new Promise<void>(() => {}));
+    let polls = 0;
+    const sleep = () => { polls++; if (polls >= 3) state.xr = false; return Promise.resolve(); };
+    const out = await resolveXRHandoff(engine, { sleep, stopTimeoutMs: 30 });
+    expect(out).toEqual({ kind: "exited", stoppedByUs: true });
+  });
+
+  it("stopXR hangs and session never ends → stuck (bounded), never a hang", async () => {
+    const state = { xr: true, raw: "no" as const };
+    const engine = fakeEngine(state, () => new Promise<void>(() => {}));
+    const out = await resolveXRHandoff(engine, { sleep: immediateSleep, stopTimeoutMs: 30, exitPolls: 5 });
+    expect(out).toEqual({ kind: "stuck" });
+    expect(engine.stopXR).toHaveBeenCalledTimes(1);
+  });
+
+  it("session ends on its own during probe → exited (not stoppedByUs), stopXR untouched", async () => {
+    const state: { xr: boolean; raw: "pending" | "yes" | "no" } = { xr: true, raw: "pending" };
+    const engine = fakeEngine(state, () => Promise.resolve());
+    const sleep = () => { state.xr = false; state.raw = "no"; return Promise.resolve(); };
+    const out = await resolveXRHandoff(engine, { sleep });
+    expect(out).toEqual({ kind: "exited", stoppedByUs: false });
+    expect(engine.stopXR).not.toHaveBeenCalled();
+  });
+});
