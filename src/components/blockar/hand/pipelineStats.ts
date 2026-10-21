@@ -109,6 +109,27 @@ export class PipelineStatsTracker {
   }
 }
 
+/**
+ * Results-with-no-landmarks threshold for the framing hint (round 3).
+ *
+ * The round-3 machine harness proved a failure mode the counters could
+ * already count but the user could not act on: the pipeline runs perfectly
+ * (worker READY, results arriving 1:1, zero errors) while the model finds
+ * no hand in ANY frame — because the hand is framed so close/cropped that
+ * no recognisable hand is in the picture (an extreme palm close-up was
+ * reproduced in-app: 797 results, 0 with landmarks, and the same content
+ * scored 0/8 through the bare worker). That is a USER-correctable framing
+ * problem, not a pipeline fault — but the HUD only ever said "Looking for
+ * hand…". After this many consecutive result-bearing seconds with zero
+ * landmark results, the host shows an actionable framing hint instead.
+ * 30 results ≈ 3 s of worker replies at the phone's 10 fps CPU rate.
+ */
+export const FRAMING_HINT_MIN_RESULTS = 30;
+
+export function shouldShowFramingHint(snap: PipelineSnapshot): boolean {
+  return snap.resultsReceived >= FRAMING_HINT_MIN_RESULTS && snap.resultsWithLandmarks === 0;
+}
+
 /** Consecutive DETECT_ERROR replies that trigger a worker restart. */
 export const DETECT_ERROR_ESCALATION_THRESHOLD = 5;
 

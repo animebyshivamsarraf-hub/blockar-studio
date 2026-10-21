@@ -7,7 +7,7 @@ import { GrabController3D } from "../interaction/GrabController3D";
 import { FrameGate } from "./frameGate";
 import { FrameArrivalWatchdog } from "./frameArrival";
 import { MAX_WORKER_RESTARTS, WORKER_INFERENCE_TIMEOUT_MS } from "./workerPolicy";
-import { PipelineStatsTracker, noResultAction, shouldEscalateDetectErrors, type PipelineSnapshot } from "./pipelineStats";
+import { PipelineStatsTracker, noResultAction, shouldEscalateDetectErrors, shouldShowFramingHint, type PipelineSnapshot } from "./pipelineStats";
 import type { FrameSource } from "../camera/CameraOwnership";
 
 // WASM and model are bundled locally (public/wasm/, public/models/) —
@@ -23,6 +23,13 @@ export type TrackStatus = "not detected" | "tracking" | "lost" | "reacquiring";
 export interface HandInfo { status: TrackStatus; pinch: PinchPhase; ratio: number; grabbing: boolean }
 /** Live frame-pipeline evidence, surfaced to the host for the Dev Test Logs. */
 export interface PipelineDiagnostics extends PipelineSnapshot {
+  /**
+   * True when results are flowing but NONE has ever contained landmarks:
+   * the pipeline is healthy and the hand is not recognisably framed
+   * (too close / cropped / unlit). The host turns this into an actionable
+   * framing hint instead of an eternal "Looking for hand…" (round 3).
+   */
+  framingHint: boolean;
   frameSource: FrameSource;
   workerDelegate: "GPU" | "CPU";
   workerReady: boolean;
@@ -1058,8 +1065,10 @@ export class HandSystemRuntime {
 
   /** Live frame-chain evidence: counters + video/worker state, for the Dev Test Logs. */
   getPipelineStats(now = performance.now()): PipelineDiagnostics {
+    const snap = this.stats.snapshot(now);
     return {
-      ...this.stats.snapshot(now),
+      ...snap,
+      framingHint: shouldShowFramingHint(snap),
       frameSource: this.frameSource,
       workerDelegate: this.workerDelegate,
       workerReady: this.workerReady,

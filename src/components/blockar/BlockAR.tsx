@@ -113,6 +113,9 @@ export function BlockAR() {
   const handRuntime = useRef<HandSystemRuntime | null>(null);
   /** Throttle for pipeline-counter telemetry (the diag callback fires ~10×/s). */
   const lastStatsLog = useRef(0);
+  /** Results flowing but no hand recognisably framed — actionable hint state. */
+  const [framingHint, setFramingHint] = useState(false);
+  const framingHintRef = useRef(false);
   const [handLabels, setHandLabels] = useState<{ side: string; x: number; y: number; text: string }[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -125,7 +128,12 @@ export function BlockAR() {
   useEffect(() => {
     detectDeviceCapabilities().then((cap) => {
       setCapability(cap);
-      setXrOk(cap.immersiveArSupported);
+      // AR placement in this app is built on hit-test anchoring, and the
+      // engine REQUIRES it at session start (requiredFeatures: ["hit-test"]).
+      // Offering "Start WebXR AR" on immersive-ar-without-hit-test devices
+      // promised a session that could only reject — gate the AR UI on both,
+      // matching the capability detector's own backend policy (round 3).
+      setXrOk(cap.immersiveArSupported && cap.hitTestSupported);
     }).catch(() => setXrOk(false));
     return () => streamRef.current?.getTracks().forEach((t) => t.stop());
   }, []);
@@ -567,6 +575,8 @@ export function BlockAR() {
       stopHands.current = null;
       setHand("off");
       setHandSeen(false);
+      framingHintRef.current = false;
+      setFramingHint(false);
       setHandError(null);
       clearHandCanvas();
       dispatchCamera({ type: "HANDS_OFF" });
@@ -677,6 +687,19 @@ export function BlockAR() {
             vid: `${p.videoReadyState}/${p.videoWidth}x${p.videoHeight}${p.videoPaused ? "P" : ""}`,
             lastResMs: p.msSinceLastResult, lastLmMs: p.msSinceLastLandmark,
           });
+          // Framing hint (round 3): results are flowing but not one has
+          // contained landmarks — the pipeline is provably healthy and the
+          // hand is not recognisably in frame (too close/cropped/unlit).
+          // Say the fixable thing once per transition instead of leaving
+          // an eternal, unactionable "Looking for hand…".
+          if (p.framingHint !== framingHintRef.current) {
+            framingHintRef.current = p.framingHint;
+            setFramingHint(p.framingHint);
+            if (p.framingHint) {
+              deviceTelemetry.log("hand_framing_hint", { res: p.resultsReceived, lm: p.resultsWithLandmarks });
+              setToast("Camera chal rahi hai, lekin haath saaf nahi dikh raha — haath pura frame me, thoda door, roshni me rakho");
+            }
+          }
         }
         const l = d.left.status === "tracking" || d.right.status === "tracking";
         anyHand = l;
@@ -910,7 +933,7 @@ export function BlockAR() {
                       {backendType}
                     </span>
                     <span>
-                      {hand === "off" ? "Tap to enable" : hand === "error" ? (handError?.slice(0, 24) || "Failed") : hand === "on" ? (handSeen ? "Hand detected" : "Looking for hand…") : "Please wait…"}
+                      {hand === "off" ? "Tap to enable" : hand === "error" ? (handError?.slice(0, 24) || "Failed") : hand === "on" ? (handSeen ? "Hand detected" : framingHint ? "Whole hand in frame?" : "Looking for hand…") : "Please wait…"}
                     </span>
                   </div>
                 </button>

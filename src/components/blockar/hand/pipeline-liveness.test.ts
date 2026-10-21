@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   PipelineStatsTracker,
   DETECT_ERROR_ESCALATION_THRESHOLD,
+  FRAMING_HINT_MIN_RESULTS,
   noResultAction,
   shouldEscalateDetectErrors,
+  shouldShowFramingHint,
 } from "./pipelineStats";
 import { PinchStateMachine } from "./PinchStateMachine";
 
@@ -174,5 +176,40 @@ describe("PinchStateMachine — pinch detection from landmark ratios", () => {
     p.reset();
     expect(p.phase).toBe("OPEN");
     expect(p.held).toBe(false);
+  });
+});
+
+describe("framing hint (round 3) — results flowing, hand never recognisable", () => {
+  // The round-3 harness reproduced candidate (e) in-app on this machine:
+  // 797 worker results, 0 with landmarks, because the "camera" frame was
+  // an extreme palm close-up with no hand outline. The pipeline was
+  // healthy; only the framing was wrong — and the user got no actionable
+  // signal. The hint policy turns that counter pattern into one.
+  function trackerWith(results: number, landmarkResults: number): PipelineStatsTracker {
+    const t = new PipelineStatsTracker();
+    for (let i = 0; i < results; i++) t.result(1000 + i * 100, i < landmarkResults ? 1 : 0);
+    return t;
+  }
+
+  it("stays quiet below the results threshold", () => {
+    const t = trackerWith(FRAMING_HINT_MIN_RESULTS - 1, 0);
+    expect(shouldShowFramingHint(t.snapshot(100000))).toBe(false);
+  });
+
+  it("fires when many results arrived and none contained landmarks", () => {
+    const t = trackerWith(FRAMING_HINT_MIN_RESULTS, 0);
+    expect(shouldShowFramingHint(t.snapshot(100000))).toBe(true);
+  });
+
+  it("never fires once any result contained landmarks", () => {
+    const t = trackerWith(FRAMING_HINT_MIN_RESULTS + 10, 1);
+    expect(shouldShowFramingHint(t.snapshot(100000))).toBe(false);
+  });
+
+  it("reset clears the condition (new hand session starts clean)", () => {
+    const t = trackerWith(FRAMING_HINT_MIN_RESULTS, 0);
+    expect(shouldShowFramingHint(t.snapshot(100000))).toBe(true);
+    t.reset();
+    expect(shouldShowFramingHint(t.snapshot(100000))).toBe(false);
   });
 });
