@@ -44,6 +44,16 @@ export interface EngineOpts {
   onXRStateChange?: (s: { active: boolean; rawCamera: boolean; pending?: boolean }) => void;
   onHandStatus?: (status: "tracking" | "pinching" | "grabbing" | "lost" | "frozen" | "reacquiring", details?: any) => void;
   onXREnd?: () => void;
+  /**
+   * P0 fix (2026-10-28, branch fix/blockar-p0-handoff): called when the
+   * host reports that the raw-camera path has failed (second raw stall /
+   * no-frames). Previously markRawCameraFailed() was a no-op, so that
+   * report did nothing and hands sat dead in AR. The host wires this to
+   * its XR-exit-to-DOM handoff; the engine itself still has no raw reader
+   * and rawCameraState() stays "no" — this callback is the handoff, not a
+   * fake frame producer.
+   */
+  onRawCameraFailed?: () => void;
 }
 
 export function createEngine(o: EngineOpts) {
@@ -768,10 +778,11 @@ export function createEngine(o: EngineOpts) {
   // the SUPPORTED hand-tracking path is the host's rear-camera MediaPipe
   // fallback (XR exit → one DOM stream → worker). The sink below is stored
   // only so a host that installs one never crashes; nothing ever pushes
-  // into it, no host path waits on it (frameSource "xr" is unreachable
-  // while rawCameraState() is "no"), and markRawCameraFailed() is a no-op
-  // because there is no raw pipeline to tear down. Do not turn these into
-  // a fake frame producer — a real raw mode requires a real reader.
+  // into it, and no host path waits on it (frameSource "xr" is unreachable
+  // while rawCameraState() is "no"). P0 fix: markRawCameraFailed() is no
+  // longer a no-op — it calls the host's onRawCameraFailed handoff (exit
+  // XR → DOM camera). Do not turn these into a fake frame producer — a
+  // real raw mode requires a real reader.
   let xrCameraSink: null | { want: (now: number) => boolean; push: (px: Uint8Array, w: number, h: number, now: number) => void } = null;
 
   async function startXR(overlay: HTMLElement) {
@@ -1011,9 +1022,11 @@ export function createEngine(o: EngineOpts) {
     // designed rear-camera MediaPipe fallback instead of crashing on a
     // missing method (startupGuards probe + BlockAR dispatchCamera).
     rawCameraState: () => "no",
-    // No raw pipeline exists in this build to tear down; the failed state
-    // is already permanent (rawCameraState() === "no").
-    markRawCameraFailed: () => {},
+    // P0 fix: no raw pipeline exists to tear down, but a raw failure is
+    // no longer swallowed. Delegate to the host's XR-exit handoff so a
+    // second raw stall / no-frames actually leaves AR and reopens the DOM
+    // rear camera, instead of sitting dead in AR (the shipped no-op bug).
+    markRawCameraFailed: () => { try { o.onRawCameraFailed?.(); } catch { /* host errors never break the engine */ } },
     // Store camera sink from host. In this build without XRCameraReader,
     // raw camera is "no", so no frames are pushed.
     setXRCameraSink(sink: typeof xrCameraSink) { xrCameraSink = sink; },
