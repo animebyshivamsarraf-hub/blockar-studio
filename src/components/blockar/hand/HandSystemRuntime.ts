@@ -54,12 +54,27 @@ export interface HandDiagnostics {
 /**
  * Strict rear-camera validation. Accept only a confirmed environment camera.
  * Never treats an unlabeled/unknown camera as rear.
+ *
+ * P0/P1 fix (2026-10-28, branch fix/blockar-p0-handoff): the boolean alone
+ * hid WHY a working camera was rejected behind a generic "Camera
+ * unavailable". checkEnvironmentStream returns the reason so the host can
+ * log it and show a specific message. The no-front-camera rule is unchanged:
+ * every non-"ok" reason still fails closed.
  */
-export async function isEnvironmentStream(s: MediaStream): Promise<boolean> {
+export type RearCameraCheck =
+  | { ok: true; reason: "ok" }
+  | { ok: false; reason: "no-track" | "track-not-live" | "facingMode-not-environment" | "label-no-match" | "enumerate-timeout" };
+
+export async function checkEnvironmentStream(s: MediaStream): Promise<RearCameraCheck> {
   const t = s.getVideoTracks()[0];
-  if (!t || t.readyState !== "live") return false;
+  if (!t) return { ok: false, reason: "no-track" };
+  if (t.readyState !== "live") return { ok: false, reason: "track-not-live" };
   const settings = t.getSettings?.() ?? {};
-  if (settings.facingMode) return settings.facingMode === "environment";
+  if (settings.facingMode) {
+    return settings.facingMode === "environment"
+      ? { ok: true, reason: "ok" }
+      : { ok: false, reason: "facingMode-not-environment" };
+  }
   try {
     // Bounded: a wedged enumerateDevices (seen on Android after permission
     // churn) must fail closed ("not confirmed rear") instead of stalling
@@ -69,10 +84,16 @@ export async function isEnvironmentStream(s: MediaStream): Promise<boolean> {
       new Promise<MediaDeviceInfo[]>((_, reject) => setTimeout(() => reject(new Error("enumerateDevices timed out")), 3000)),
     ]);
     const dev = devices.find((d) => d.kind === "videoinput" && d.deviceId === settings.deviceId);
-    return !!dev?.label && /back|rear|environment/i.test(dev.label);
+    return !!dev?.label && /back|rear|environment/i.test(dev.label)
+      ? { ok: true, reason: "ok" }
+      : { ok: false, reason: "label-no-match" };
   } catch {
-    return false;
+    return { ok: false, reason: "enumerate-timeout" };
   }
+}
+
+export async function isEnvironmentStream(s: MediaStream): Promise<boolean> {
+  return (await checkEnvironmentStream(s)).ok;
 }
 
 export function resolveCursorOwner(
