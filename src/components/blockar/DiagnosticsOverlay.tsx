@@ -21,6 +21,19 @@ export interface DiagnosticsData {
   xrActive: boolean;
   lastError: string | null;
   lastErrorTime: string | null;
+  // P1 (?debug=cam) fields, fed by BlockAR from the runtime diagnostics
+  // callback. Values are -1 / "" when not yet reported — never fabricated.
+  framesSubmitted: number;
+  resultsReceived: number;
+  resultsWithLandmarks: number;
+  droppedFrames: number;
+  detectErrors: number;
+  pinchRatio: number;
+  pinchPhase: string;
+  // Live nearest-block distance is NOT exposed by the engine, so this
+  // field deliberately stays as the engine's radius constant, not a fake
+  // live measurement. See the overlay row label.
+  nearestBlockRadius: string;
 }
 
 const initialData: DiagnosticsData = {
@@ -43,6 +56,14 @@ const initialData: DiagnosticsData = {
   xrActive: false,
   lastError: null,
   lastErrorTime: null,
+  framesSubmitted: -1,
+  resultsReceived: -1,
+  resultsWithLandmarks: -1,
+  droppedFrames: -1,
+  detectErrors: -1,
+  pinchRatio: -1,
+  pinchPhase: "",
+  nearestBlockRadius: "0.18 m (engine radius; live distance not exposed)",
 };
 
 // Singleton store for diagnostics data - updated by engine, runtime, and UI
@@ -85,8 +106,8 @@ function Row({ label, value, warn }: { label: string; value: string; warn?: bool
   );
 }
 
-export function DiagnosticsOverlay() {
-  const [open, setOpen] = useState(false);
+export function DiagnosticsOverlay({ defaultOpen = false }: { defaultOpen?: boolean } = {}) {
+  const [open, setOpen] = useState(defaultOpen);
   const [data, setData] = useState<DiagnosticsData>(() => diagnosticsStore.get());
   const lastTimeRef = useRef(0);
 
@@ -182,6 +203,14 @@ export function DiagnosticsOverlay() {
       <Row label="hand fps" value={String(data.handFps)} warn={data.handFps < 5 && data.handFps > 0} />
 
       <div style={{ color: "#ffd93d", fontSize: 11, fontWeight: 700, margin: "8px 0 4px" }}>🤖 WORKER</div>
+      <Row label="framesSubmitted" value={data.framesSubmitted < 0 ? "-" : String(data.framesSubmitted)} />
+      <Row label="resultsReceived" value={data.resultsReceived < 0 ? "-" : String(data.resultsReceived)} />
+      <Row label="resultsWithLandmarks" value={data.resultsWithLandmarks < 0 ? "-" : String(data.resultsWithLandmarks)} />
+      <Row label="droppedFrames" value={data.droppedFrames < 0 ? "-" : String(data.droppedFrames)} />
+      <Row label="detectErrors" value={data.detectErrors < 0 ? "-" : String(data.detectErrors)} />
+      <Row label="pinchRatio" value={data.pinchRatio < 0 ? "-" : data.pinchRatio.toFixed(2)} />
+      <Row label="pinchPhase" value={data.pinchPhase || "-"} />
+      <Row label="nearestBlockRadius" value={data.nearestBlockRadius} />
       <Row label="workerState" value={data.workerState} warn={data.workerState === "error"} />
       <Row label="delegate" value={data.delegate} />
       <Row label="restarts" value={String(data.restartCount)} warn={data.restartCount >= 3} />
