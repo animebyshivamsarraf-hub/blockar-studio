@@ -325,6 +325,7 @@ export function BlockAR() {
         { facingMode: "environment", width: { ideal: 960, max: 960 }, height: { ideal: 540, max: 540 } },
       ];
       let last: unknown = null;
+      let rearRejected = false;
       for (const video of tries) {
         try {
           const s = await navigator.mediaDevices.getUserMedia({ video, audio: false });
@@ -332,6 +333,7 @@ export function BlockAR() {
           // P1: log WHY a stream is rejected, don't just stop it silently.
           const check = await checkEnvironmentStream(s);
           if (check.ok) return s;
+          rearRejected = true;
           lastRearRejectReason.current = check.reason;
           debugCamLog("acquireRearStream: rear-camera check failed", check.reason);
           s.getTracks().forEach((t) => t.stop());
@@ -342,6 +344,11 @@ export function BlockAR() {
           debugCamLog("acquireRearStream: failed", e);
         }
       }
+      // ChatGPT P0-gap fix: a stream that was opened but rejected by the
+      // rear-camera check must surface as a rear-camera error, not as a
+      // generic "unavailable" — otherwise allowCamera's caller cannot tell
+      // a wrong camera from a missing camera.
+      if (rearRejected) throw new Error("Rear camera required — the opened camera is not the environment camera. BlockAR never uses the front camera.");
       throw last instanceof Error ? last : new Error("Rear camera unavailable");
     })();
     gumInFlight.current = p;
@@ -357,11 +364,18 @@ export function BlockAR() {
   const autoExitingXR = useRef(false);
   const rawWatchdog = useRef(new RawFrameWatchdog(2500));
   const rawStalls = useRef(0);
-  // P0 fix: single getUserMedia guard. restoreVideoPipeline, allowCamera,
-  // the preview watchdog and the enterXR retry can all request a stream
-  // from different paths; a second parallel getUserMedia on Android can
-  // wedge the first. While one request is in flight, later callers reuse
-  // that same promise instead of opening a second stream.
+  // P0 fix (completed after ChatGPT review): single getUserMedia guard.
+  // acquireRearStream() is the ONLY place in BlockAR.tsx that calls
+  // the camera API directly. restoreVideoPipeline, allowCamera
+  // and the enterXR retry all route through it; a second parallel
+  // getUserMedia on Android can wedge the first, so while one request is
+  // in flight, later callers reuse that same promise instead of opening
+  // a second stream. allowCamera() previously had its own direct
+  // getUserMedia calls that bypassed this guard — that path is removed.
+  // (HandSystemRuntime.startMediaPipe has its own getUserMedia, but only
+  // for the standalone /hand-lab entry when no external stream is passed;
+  // the BlockAR main flow always passes it a live stream from
+  // allowCamera(), so it never opens a competing stream there.)
   const gumInFlight = useRef<Promise<MediaStream> | null>(null);
   const gumAttempts = useRef(0);
   // P0 fix: visible handoff state. The user previously saw only a frozen
@@ -460,7 +474,14 @@ export function BlockAR() {
     deviceTelemetry.log("xr_handoff_auto_exit", { owner: camState.current.owner, frameSource: frameSourceFor(camState.current) });
     handRuntime.current?.setFrameSource("none");
     e.handLost();
-    void e.stopXR(true).finally(() => { setTimeout(() => { autoExitingXR.current = false; setHandoffMsg(null); }, 300); });
+    // ChatGPT P0-gap fix: do NOT clear the handoff banner after a short
+    // delay regardless of recovery. The banner stays visible until camera
+    // recovery reaches a terminal state: restoreVideoPipeline() clears it
+    // on success (CAMERA_RESTORED), and its failure toast explains the
+    // reason while recovery retries. Clearing it after 300 ms made a
+    // still-broken handoff look finished. Only the in-progress flag is
+    // reset here, so a second auto-exit cannot stack on the first.
+    void e.stopXR(true).finally(() => { autoExitingXR.current = false; });
   }
 
   /** Single place where camera ownership changes and the hand frame source follows. */
@@ -469,6 +490,11 @@ export function BlockAR() {
     const next = cameraReducer(prev, ev);
     camState.current = next;
     setCamOwner(next);
+    // Terminal superseding states only: a fresh XR session, or hands
+    // turned off, abandons any in-progress DOM-camera handoff, so its
+    // banner may clear. XR_ENDED does NOT clear it here — restore
+    // success/failure owns that state (see autoExitXRForHands).
+    if (ev.type === "XR_STARTED" || ev.type === "HANDS_OFF") setHandoffMsg(null);
     if (ev.type === "XR_STARTED" || ev.type === "HANDS_OFF") camEpoch.current++;
     if (ev.type === "XR_STARTED" && ev.rawCamera) { rawStalls.current = 0; rawHandoffToasted.current = false; rawWatchdog.current.reset(performance.now()); }
     const rt = handRuntime.current;
@@ -525,21 +551,6 @@ export function BlockAR() {
   async function allowCamera(): Promise<MediaStream | null> {
     setCamErr(null);
     debugCamLog("allowCamera: requesting getUserMedia");
-    // P0 single-getUserMedia guard: if a restore is already opening a
-    // stream, wait for it instead of opening a second parallel stream.
-    if (gumInFlight.current) {
-      debugCamLog("allowCamera: getUserMedia already in flight — reusing in-flight request");
-      try {
-        const inFlight = await gumInFlight.current;
-        const t = inFlight.getVideoTracks()[0];
-        if (t?.readyState === "live" && !t.muted) {
-          streamRef.current = inFlight; setCamOk(true); attachTrackListeners(inFlight);
-          if (videoRef.current) { videoRef.current.srcObject = inFlight; await videoRef.current.play().catch(() => {}); }
-          setStage("build"); setToast("Rear camera ready · tap Start WebXR AR for room tracking");
-          return inFlight;
-        }
-      } catch { /* fall through to a fresh request below */ }
-    }
     try {
       // Exactly ONE camera stream may exist. A healthy stream that the
       // preview is already showing is reused as-is (re-opening would leak
@@ -558,36 +569,15 @@ export function BlockAR() {
         prevStream.getTracks().forEach((t) => t.stop());
         if (streamRef.current === prevStream) streamRef.current = null;
       }
-      let s: MediaStream;
-      try {
-        s = await navigator.mediaDevices.getUserMedia({ video: {
-          facingMode: { exact: "environment" },
-          width: { ideal: 960, max: 960 },
-          height: { ideal: 540, max: 540 },
-        },
-        audio: false });
-        debugCamLog("allowCamera: got stream", s.id);
-      } catch {
-        try {
-          s = await navigator.mediaDevices.getUserMedia({ video: {
-              facingMode: "environment",
-              width: { ideal: 960, max: 960 },
-              height: { ideal: 540, max: 540 },
-            },
-            audio: false });
-        } catch {
-          // BlockAR is rear-camera only. Never silently fall back to an arbitrary/front camera.
-          throw new Error("Rear camera unavailable. BlockAR requires the environment camera.");
-        }
-      }
-      // P1: specific rear-camera rejection reason, not a generic failure.
-      const rearCheck = await checkEnvironmentStream(s);
-      if (!rearCheck.ok) {
-        lastRearRejectReason.current = rearCheck.reason;
-        debugCamLog("allowCamera: rear-camera check failed", rearCheck.reason);
-        s.getTracks().forEach((t) => t.stop());
-        throw new Error("Rear camera required — the opened camera is not the environment camera. Chrome site settings me camera Allow karo, phir dobara try karo.");
-      }
+      // ChatGPT P0-gap fix: route through acquireRearStream(), the sole
+      // guarded getUserMedia caller in this file. That reuses an in-flight
+      // request if a restore is already opening a stream, runs both
+      // facingMode tries, and already performs the rear-camera check —
+      // so no direct getUserMedia call and no duplicate rear check here.
+      // BlockAR is rear-camera only: acquireRearStream never silently
+      // falls back to an arbitrary/front camera.
+      const s: MediaStream = await acquireRearStream();
+      debugCamLog("allowCamera: got stream via acquireRearStream", s.id);
       streamRef.current = s;
       setCamOk(true);
       attachTrackListeners(s);
