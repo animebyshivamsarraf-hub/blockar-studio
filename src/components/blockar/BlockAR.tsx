@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { Box, Camera, Check, Circle, Cylinder, Hand, Move, Paintbrush, Redo2, Save, FolderOpen, Trash2, Triangle, Undo2, Group, ScanLine, Pointer } from "lucide-react";
 import { COLORS, createEngine, type Engine, type Mode, type Shape } from "./engine";
 import { cn } from "@/lib/utils";
-import { HandSystemRuntime, isEnvironmentStream } from "./hand/HandSystemRuntime";
+import { HandSystemRuntime, checkEnvironmentStream } from "./hand/HandSystemRuntime";
+import { DiagnosticsOverlay, diagnosticsStore } from "./DiagnosticsOverlay";
 import { aiBuild } from "@/lib/ai-build.functions";
 import { cameraReducer, frameSourceFor, handsPausedByXR, initialCameraState, needsFreshStream, xrHandoffAction, type CameraEvent, type CameraState } from "./camera/CameraOwnership";
 import { RawFrameWatchdog } from "./camera/RawFrameWatchdog";
@@ -153,6 +154,10 @@ export function BlockAR() {
         setRawPending(!!pending);
         dispatchCamera(active ? { type: "XR_STARTED", rawCamera } : { type: "XR_ENDED" }, !!pending);
       },
+      // P0 fix: raw failure is no longer a no-op. The engine calls this
+      // when the host reports a second raw stall / no-frames; the host
+      // then exits XR and reopens the DOM rear camera (anchor kept).
+      onRawCameraFailed: () => { autoExitXRForHands(); },
     });
     engine.current = e;
     return () => { e.dispose(); engine.current = null; };
@@ -307,21 +312,40 @@ export function BlockAR() {
 
   /** Open the rear camera without touching app stage (used for silent recovery). */
   async function acquireRearStream(): Promise<MediaStream> {
-    debugCamLog("acquireRearStream: requesting getUserMedia");
-    const tries: MediaTrackConstraints[] = [
-      { facingMode: { exact: "environment" }, width: { ideal: 960, max: 960 }, height: { ideal: 540, max: 540 } },
-      { facingMode: "environment", width: { ideal: 960, max: 960 }, height: { ideal: 540, max: 540 } },
-    ];
-    let last: unknown = null;
-    for (const video of tries) {
-      try {
-        const s = await navigator.mediaDevices.getUserMedia({ video, audio: false });
-        debugCamLog("acquireRearStream: got stream", s.id);
-        if (await isEnvironmentStream(s)) return s;
-        s.getTracks().forEach((t) => t.stop());
-      } catch (e) { last = e; debugCamLog("acquireRearStream: failed", e); }
+    // P0 single-getUserMedia guard: reuse an in-flight request.
+    if (gumInFlight.current) {
+      debugCamLog("acquireRearStream: getUserMedia already in flight — reusing in-flight request");
+      return gumInFlight.current;
     }
-    throw last instanceof Error ? last : new Error("Rear camera unavailable");
+    const p = (async (): Promise<MediaStream> => {
+      gumAttempts.current++;
+      debugCamLog("acquireRearStream: requesting getUserMedia", "attempt", gumAttempts.current);
+      const tries: MediaTrackConstraints[] = [
+        { facingMode: { exact: "environment" }, width: { ideal: 960, max: 960 }, height: { ideal: 540, max: 540 } },
+        { facingMode: "environment", width: { ideal: 960, max: 960 }, height: { ideal: 540, max: 540 } },
+      ];
+      let last: unknown = null;
+      for (const video of tries) {
+        try {
+          const s = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+          debugCamLog("acquireRearStream: got stream", s.id);
+          // P1: log WHY a stream is rejected, don't just stop it silently.
+          const check = await checkEnvironmentStream(s);
+          if (check.ok) return s;
+          lastRearRejectReason.current = check.reason;
+          debugCamLog("acquireRearStream: rear-camera check failed", check.reason);
+          s.getTracks().forEach((t) => t.stop());
+        } catch (e) {
+          last = e;
+          // P1: permission denial must not hide behind "Camera unavailable".
+          if ((e as Error)?.name === "NotAllowedError") lastRearRejectReason.current = "permission-denied";
+          debugCamLog("acquireRearStream: failed", e);
+        }
+      }
+      throw last instanceof Error ? last : new Error("Rear camera unavailable");
+    })();
+    gumInFlight.current = p;
+    try { return await p; } finally { if (gumInFlight.current === p) gumInFlight.current = null; }
   }
 
   const recoveringCamera = useRef(false);
@@ -333,6 +357,23 @@ export function BlockAR() {
   const autoExitingXR = useRef(false);
   const rawWatchdog = useRef(new RawFrameWatchdog(2500));
   const rawStalls = useRef(0);
+  // P0 fix: single getUserMedia guard. restoreVideoPipeline, allowCamera,
+  // the preview watchdog and the enterXR retry can all request a stream
+  // from different paths; a second parallel getUserMedia on Android can
+  // wedge the first. While one request is in flight, later callers reuse
+  // that same promise instead of opening a second stream.
+  const gumInFlight = useRef<Promise<MediaStream> | null>(null);
+  const gumAttempts = useRef(0);
+  // P0 fix: visible handoff state. The user previously saw only a frozen
+  // camera while the XR→DOM handoff was running; this toast is set before
+  // the handoff starts and cleared by the restore success toast.
+  const [handoffMsg, setHandoffMsg] = useState<string | null>(null);
+  const rawHandoffToasted = useRef(false);
+  // Last rear-camera rejection reason, for the restore failure toast.
+  const lastRearRejectReason = useRef<string | null>(null);
+  // ?debug=cam: show the camera diagnostics overlay automatically. Without
+  // it, behaviour is unchanged (overlay is not rendered at all).
+  const showCamDebug = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "cam";
 
   /**
    * Restore the rear DOM camera → MediaPipe pipeline (after XR ends or the stream stalls).
@@ -354,15 +395,29 @@ export function BlockAR() {
         s?.getTracks().forEach((t) => t.stop());
         if (streamRef.current === s) streamRef.current = null;
         s = null;
+        // P0 adaptive XR-release wait: keep the 350 ms first attempt (fast
+        // phones release quickly), then back off 500/1000/1500/2000 ms.
+        // Do NOT increase the fixed wait blindly — that would slow every
+        // XR exit on phones that release fast. Attempt + last reason are
+        // logged so a phone test can tell XR-release from getUserMedia
+        // failure instead of seeing one generic "unavailable".
+        const restoreStarted = performance.now();
         if (reason === "xr-ended") await sleep(350); // let Android release the camera from the AR session
         for (let i = 0; i < 4 && !s; i++) {
           if (stale()) return;
-          try { s = await acquireRearStream(); } catch { await sleep(500 * (i + 1)); }
+          try { s = await acquireRearStream(); } catch (e) { debugCamLog("restoreVideoPipeline: attempt", i + 1, "failed after", Math.round(performance.now() - restoreStarted), "ms", "rearReason", lastRearRejectReason.current, e); await sleep(500 * (i + 1)); }
           if (stale()) { s?.getTracks().forEach((t) => t.stop()); return; }
         }
+        if (s) debugCamLog("restoreVideoPipeline: restored after", Math.round(performance.now() - restoreStarted), "ms");
       }
       if (!s) {
-        setToast("Camera unavailable — retrying. Touch building still works.");
+        // P1: surface the rejection reason instead of only "unavailable".
+        const reasonText = lastRearRejectReason.current === "permission-denied"
+          ? "Camera permission denied — Chrome site settings me camera Allow karo, phir dobara try karo."
+          : lastRearRejectReason.current
+            ? `Camera unavailable (rear check: ${lastRearRejectReason.current}) — retrying. Touch building still works.`
+            : "Camera unavailable — retrying. Touch building still works.";
+        setToast(reasonText);
         rt.setFrameSource("none");
         dispatchCamera({ type: "CAMERA_LOST" });
         // Never give up permanently: try again shortly.
@@ -380,6 +435,7 @@ export function BlockAR() {
       }
       rt.setFrameSource("video", s);
       dispatchCamera({ type: "CAMERA_RESTORED" });
+      setHandoffMsg(null);
       setToast(reason === "xr-ended" ? "Rear-camera hand mode on · pinch to build" : "Camera restored — hand control resumed");
     } finally {
       recoveringCamera.current = false;
@@ -397,10 +453,14 @@ export function BlockAR() {
     const e = engine.current;
     if (!e || autoExitingXR.current) return;
     autoExitingXR.current = true;
+    // P0 visible handoff state: previously the user saw only a frozen
+    // camera while this ran. Show the switch explicitly.
+    setHandoffMsg("AR se rear-camera hand mode me ja raha hai…");
+    setToast("This phone can't share the AR camera — switching to rear-camera hand mode. Your build stays anchored.");
+    deviceTelemetry.log("xr_handoff_auto_exit", { owner: camState.current.owner, frameSource: frameSourceFor(camState.current) });
     handRuntime.current?.setFrameSource("none");
     e.handLost();
-    setToast("This phone can't share the AR camera — switching to rear-camera hand mode. Your build stays anchored.");
-    void e.stopXR(true).finally(() => { setTimeout(() => { autoExitingXR.current = false; }, 300); });
+    void e.stopXR(true).finally(() => { setTimeout(() => { autoExitingXR.current = false; setHandoffMsg(null); }, 300); });
   }
 
   /** Single place where camera ownership changes and the hand frame source follows. */
@@ -410,7 +470,7 @@ export function BlockAR() {
     camState.current = next;
     setCamOwner(next);
     if (ev.type === "XR_STARTED" || ev.type === "HANDS_OFF") camEpoch.current++;
-    if (ev.type === "XR_STARTED" && ev.rawCamera) { rawStalls.current = 0; rawWatchdog.current.reset(performance.now()); }
+    if (ev.type === "XR_STARTED" && ev.rawCamera) { rawStalls.current = 0; rawHandoffToasted.current = false; rawWatchdog.current.reset(performance.now()); }
     const rt = handRuntime.current;
     const e = engine.current;
     const src = frameSourceFor(next);
@@ -447,6 +507,16 @@ export function BlockAR() {
       rawWatchdog.current.reset(now);
       rawStalls.current++;
       if (rawStalls.current < 2) { rt.setFrameSource("xr"); return; } // first: reset the frame gate
+      // P0 fix: second stall now actually hands off. Previously
+      // markRawCameraFailed() was a no-op, so this line did nothing and
+      // hands sat dead in AR. Now the engine delegates to the host's
+      // onRawCameraFailed → autoExitXRForHands → DOM rear camera.
+      if (!rawHandoffToasted.current) {
+        rawHandoffToasted.current = true;
+        setHandoffMsg("AR camera se haath nahi mil raha — rear-camera mode me ja raha hai…");
+        setToast("AR camera se haath nahi mil raha — rear-camera mode me ja raha hai…");
+        deviceTelemetry.log("raw_camera_failed_handoff", { stalls: rawStalls.current });
+      }
       engine.current?.markRawCameraFailed(); // second: give up on raw camera → automatic handoff
     }, 500);
     return () => window.clearInterval(id);
@@ -455,6 +525,21 @@ export function BlockAR() {
   async function allowCamera(): Promise<MediaStream | null> {
     setCamErr(null);
     debugCamLog("allowCamera: requesting getUserMedia");
+    // P0 single-getUserMedia guard: if a restore is already opening a
+    // stream, wait for it instead of opening a second parallel stream.
+    if (gumInFlight.current) {
+      debugCamLog("allowCamera: getUserMedia already in flight — reusing in-flight request");
+      try {
+        const inFlight = await gumInFlight.current;
+        const t = inFlight.getVideoTracks()[0];
+        if (t?.readyState === "live" && !t.muted) {
+          streamRef.current = inFlight; setCamOk(true); attachTrackListeners(inFlight);
+          if (videoRef.current) { videoRef.current.srcObject = inFlight; await videoRef.current.play().catch(() => {}); }
+          setStage("build"); setToast("Rear camera ready · tap Start WebXR AR for room tracking");
+          return inFlight;
+        }
+      } catch { /* fall through to a fresh request below */ }
+    }
     try {
       // Exactly ONE camera stream may exist. A healthy stream that the
       // preview is already showing is reused as-is (re-opening would leak
@@ -495,9 +580,13 @@ export function BlockAR() {
           throw new Error("Rear camera unavailable. BlockAR requires the environment camera.");
         }
       }
-      if (!(await isEnvironmentStream(s))) {
+      // P1: specific rear-camera rejection reason, not a generic failure.
+      const rearCheck = await checkEnvironmentStream(s);
+      if (!rearCheck.ok) {
+        lastRearRejectReason.current = rearCheck.reason;
+        debugCamLog("allowCamera: rear-camera check failed", rearCheck.reason);
         s.getTracks().forEach((t) => t.stop());
-        throw new Error("Rear camera required — the opened camera is not the environment camera.");
+        throw new Error("Rear camera required — the opened camera is not the environment camera. Chrome site settings me camera Allow karo, phir dobara try karo.");
       }
       streamRef.current = s;
       setCamOk(true);
@@ -514,9 +603,13 @@ export function BlockAR() {
       setToast("Rear camera ready · tap Start WebXR AR for room tracking");
       return s;
     } catch (err: any) {
+      // P1: keep a specific rear-camera message instead of collapsing it
+      // into a generic "unavailable" message.
       const errMsg = err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError"
         ? "Camera permission denied. Allow camera in browser settings."
-        : "Rear camera unavailable. Please check device permissions.";
+        : typeof err?.message === "string" && err.message.startsWith("Rear camera required")
+          ? err.message
+          : "Rear camera unavailable. Please check device permissions.";
       setCamErr(errMsg);
       setToast(errMsg);
       throw new Error(errMsg);
@@ -680,6 +773,28 @@ export function BlockAR() {
         const p = d.pipeline;
         if (p && performance.now() - lastStatsLog.current > 4000) {
           lastStatsLog.current = performance.now();
+          // P1 (?debug=cam): surface the same counters in the overlay,
+          // plus the live pinch ratio/phase, so a phone test can separate
+          // "camera frozen" / "worker dropped" / "pinch never crossed".
+          // Nearest-block live distance is NOT exposed by the engine, so
+          // the overlay shows the engine radius constant instead of a fake.
+          diagnosticsStore.update({
+            cameraOwner: camState.current.owner,
+            frameSource: p.frameSource,
+            videoReadyState: p.videoReadyState,
+            trackReadyState: streamRef.current?.getVideoTracks()[0]?.readyState ?? "none",
+            trackMuted: streamRef.current?.getVideoTracks()[0]?.muted ?? false,
+            delegate: p.workerDelegate,
+            workerState: p.workerReady ? "ready" : "not-ready",
+            framesSubmitted: p.framesSubmitted,
+            resultsReceived: p.resultsReceived,
+            resultsWithLandmarks: p.resultsWithLandmarks,
+            droppedFrames: p.droppedFrames,
+            detectErrors: p.detectErrors,
+            pinchRatio: Math.max(d.left.ratio, d.right.ratio),
+            pinchPhase: d.left.status === "tracking" ? d.left.pinch : d.right.status === "tracking" ? d.right.pinch : "",
+            xrActive: camState.current.xr,
+          });
           deviceTelemetry.log("hand_pipeline_stats", {
             src: p.frameSource, del: p.workerDelegate, rdy: p.workerReady ? 1 : 0,
             f: p.framesSubmitted, res: p.resultsReceived, lm: p.resultsWithLandmarks,
@@ -738,6 +853,13 @@ export function BlockAR() {
         // The worker is alive but XR frames never arrive: hand the camera
         // back through the normal ownership handoff (raw failed → exit XR →
         // rear-camera hand mode) instead of waiting forever in TRACKING.
+        // P0 fix: this now actually exits XR (engine delegates to
+        // onRawCameraFailed → autoExitXRForHands); previously it was a no-op.
+        if (!rawHandoffToasted.current) {
+          rawHandoffToasted.current = true;
+          setHandoffMsg("AR camera se haath nahi mil raha — rear-camera mode me ja raha hai…");
+          deviceTelemetry.log("raw_camera_failed_handoff", { source: "onNoFrames" });
+        }
         engine.current?.markRawCameraFailed();
       };
       rt.onOwnerLost = () => {
@@ -1040,6 +1162,8 @@ export function BlockAR() {
             </div>
           )}
           {toast && <div className="mx-auto mb-2 rounded-full bg-primary px-4 py-1.5 text-sm font-medium text-primary-foreground">{toast}</div>}
+          {handoffMsg && <div role="status" className="mx-auto mb-2 rounded-full bg-amber-500 px-4 py-1.5 text-sm font-medium text-black">{handoffMsg}</div>}
+          {showCamDebug && <DiagnosticsOverlay defaultOpen />}
 
           {/* bottom */}
           <div className={cn("pointer-events-auto flex flex-col gap-2", riding && pov && "hidden")}>
